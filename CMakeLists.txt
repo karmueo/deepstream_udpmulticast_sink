@@ -1,18 +1,14 @@
 cmake_minimum_required(VERSION 3.16)
 project(gst_udpmulticast_sink LANGUAGES CXX)
 
-# 可通过 -DCUDA_VER=... -DNVDS_VERSION=... 覆盖
-if(NOT DEFINED CUDA_VER)
-  set(CUDA_VER "12.6" CACHE STRING "CUDA version")
-endif()
 if(NOT DEFINED NVDS_VERSION)
-  set(NVDS_VERSION "7.1" CACHE STRING "DeepStream major.minor")
+  set(NVDS_VERSION "8.0" CACHE STRING "DeepStream major.minor")
 endif()
 set(DS_VERSION "${NVDS_VERSION}.0" CACHE STRING "DS_VERSION")
 
 # install dirs (和原 Makefile 保持一致的默认值)
-set(LIB_INSTALL_DIR "/opt/nvidia/deepstream/deepstream-${NVDS_VERSION}/lib" CACHE PATH "Library install dir")
-set(GST_INSTALL_DIR "/opt/nvidia/deepstream/deepstream-${NVDS_VERSION}/lib/gst-plugins/" CACHE PATH "GStreamer plugin dir")
+set(LIB_INSTALL_DIR "/opt/nvidia/deepstream/deepstream/lib" CACHE PATH "Library install dir")
+set(GST_INSTALL_DIR "/opt/nvidia/deepstream/deepstream/lib/gst-plugins/" CACHE PATH "GStreamer plugin dir")
 
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -fPIC")
@@ -36,7 +32,7 @@ add_library(gst_udpmulticast_sink SHARED gstudpmulticast_sink.cpp eo_protocol_pa
 
 target_compile_definitions(gst_udpmulticast_sink PRIVATE DS_VERSION=\"${DS_VERSION}\")
 target_include_directories(gst_udpmulticast_sink PRIVATE
-  /usr/local/cuda-${CUDA_VER}/include
+  /usr/local/cuda/include
   /opt/nvidia/deepstream/deepstream/sources/includes
   /usr/include/gstreamer-1.0
   ${GST_INCLUDE_DIRS}
@@ -45,7 +41,7 @@ target_include_directories(gst_udpmulticast_sink PRIVATE
 )
 target_link_libraries(gst_udpmulticast_sink PRIVATE
   ${GST_LIBRARIES}
-  -L/usr/local/cuda-${CUDA_VER}/lib64 -lcudart -ldl
+  -L/usr/local/cuda/lib64 -lcudart -ldl
   -lnppc -lnppig -lnpps -lnppicc -lnppidei
   -L${LIB_INSTALL_DIR} -lnvdsgst_helper -lnvdsgst_meta -lnvds_meta -lnvbufsurface -lnvbufsurftransform
   $<$<BOOL:${JsonCpp_FOUND}>:JsonCpp::JsonCpp>
