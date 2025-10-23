@@ -7,6 +7,29 @@
 #include <cstring>
 #include <iostream>
 #include <chrono>
+#include <net/if.h>
+#include <sys/ioctl.h>
+
+// 辅助函数：通过网卡名称获取IP地址
+static bool getInterfaceIP(const std::string& ifname, std::string& ipAddr) {
+    int fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if (fd < 0) return false;
+
+    struct ifreq ifr;
+    memset(&ifr, 0, sizeof(ifr));
+    strncpy(ifr.ifr_name, ifname.c_str(), IFNAMSIZ - 1);
+
+    if (ioctl(fd, SIOCGIFADDR, &ifr) < 0) {
+        close(fd);
+        return false;
+    }
+
+    close(fd);
+    
+    struct sockaddr_in* addr = (struct sockaddr_in*)&ifr.ifr_addr;
+    ipAddr = inet_ntoa(addr->sin_addr);
+    return true;
+}
 
 EOReceiver::EOReceiver(const std::string& mcastIp, uint16_t port, const std::string& localIf)
     : mcastIp_(mcastIp), port_(port), localIf_(localIf) {}
@@ -41,7 +64,25 @@ bool EOReceiver::start() {
     ip_mreq mreq{};
     mreq.imr_multiaddr.s_addr = inet_addr(mcastIp_.c_str());
     if (!localIf_.empty()) {
-        mreq.imr_interface.s_addr = inet_addr(localIf_.c_str());
+        // 尝试判断是网卡名称还是IP地址
+        struct in_addr addr;
+        if (inet_aton(localIf_.c_str(), &addr) != 0) {
+            // 输入是有效的IP地址
+            mreq.imr_interface.s_addr = addr.s_addr;
+            std::cout << "EOReceiver: Binding to interface IP: " << localIf_ << std::endl;
+        } else {
+            // 输入可能是网卡名称，尝试获取其IP
+            std::string ifIP;
+            if (getInterfaceIP(localIf_, ifIP)) {
+                mreq.imr_interface.s_addr = inet_addr(ifIP.c_str());
+                std::cout << "EOReceiver: Binding to interface " << localIf_ 
+                          << " (IP: " << ifIP << ")" << std::endl;
+            } else {
+                std::cerr << "EOReceiver: Failed to get IP for interface: " << localIf_ 
+                          << ", using INADDR_ANY" << std::endl;
+                mreq.imr_interface.s_addr = htonl(INADDR_ANY);
+            }
+        }
     } else {
         mreq.imr_interface.s_addr = htonl(INADDR_ANY);
     }

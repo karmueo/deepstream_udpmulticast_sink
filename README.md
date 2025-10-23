@@ -136,8 +136,10 @@ gst-launch-1.0 filesrc location=sample.h264 ! h264parse ! nvv4l2decoder ! nvstre
 示例 C 代码片段：
 ```c
 GstElement *mcast = gst_element_factory_make("udpmulticast_sink", "mcast_out");
-g_object_set(mcast, "ip", "239.255.255.250", "port", 5000, NULL);
+g_object_set(mcast, "ip", "239.255.255.250", "port", 5000, "iface", "eth0", NULL);
 ```
+
+> **网卡绑定说明**：当服务器有多块网卡时，可通过 `iface` 属性指定组播数据从哪个网卡发送。可使用 `ip addr` 或 `ifconfig` 命令查看网卡名称。
 
 ---
 
@@ -147,6 +149,7 @@ g_object_set(mcast, "ip", "239.255.255.250", "port", 5000, NULL);
 |------|------|--------|------|
 | `ip` | string | `239.255.255.250` | 组播目的地址（D 类多播：224.0.0.0 ~ 239.255.255.255，建议使用 239.x 范围内部域） |
 | `port` | uint (1~65535) | `5000` | 组播目的端口 |
+| `iface` | string | `NULL` | 组播发送网卡名称（例如：eth0, enp5s0, ens33 等），不设置则使用系统默认路由 |
 | `silent` | boolean | `TRUE` | 预留（当前未启用详细日志控制） |
 
 内部运行逻辑：
@@ -245,7 +248,8 @@ python3 recv_multicast.py --group 239.255.255.250 --port 5000
 
 ## 11. 后续可拓展建议
 
-- 增加插件属性：TTL、网卡 (outgoing interface)、是否发送空帧、是否启用 JSON 附加信息；
+- ~~增加插件属性：TTL、网卡 (outgoing interface)~~（已支持 `iface` 属性指定网卡）；
+- 增加插件属性：是否发送空帧、是否启用 JSON 附加信息；
 - 支持可靠传输（如添加重传计数或基于 QUIC）；
 - 增强安全性（可选签名或简单校验强化）；
 - 增加 Prometheus 监控指标导出；

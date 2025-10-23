@@ -33,6 +33,8 @@
 #include <ctime>
 #include <map>
 #include <math.h>
+#include <net/if.h>
+#include <sys/ioctl.h>
 
 /* enable to write transformed cvmat to files */
 /* #define DSEXAMPLE_DEBUG */
@@ -67,7 +69,8 @@ enum
     PROP_0,
     PROP_SILENT,
     PROP_IP,
-    PROP_PORT
+    PROP_PORT,
+    PROP_IFACE
 };
 
 /* the capabilities of the inputs and outputs.
@@ -141,6 +144,11 @@ static void gst_udpmulticast_sink_class_init(Gstudpmulticast_sinkClass *klass)
         g_param_spec_uint(
             "port", "Multicast Port", "Multicast destination port", 1, 65535,
             5000, (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(
+        gobject_class, PROP_IFACE,
+        g_param_spec_string(
+            "iface", "Network Interface", "Network interface name for multicast (e.g., eth0, enp5s0)", NULL,
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
     _detctAnalysis.minPixel = 9999;
 }
@@ -161,6 +169,7 @@ static void gst_udpmulticast_sink_init(Gstudpmulticast_sink *self)
     // default values
     self->ip = g_strdup("239.255.255.250");
     self->port = 5000;
+    self->iface = NULL;
 
     // 创建UDP Socket
     self->sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -423,6 +432,60 @@ static gboolean gst_udpmulticast_sink_start(GstBaseSink *sink)
     NvBufSurfaceCreateParams create_params = {0};
 
     CHECK_CUDA_STATUS(cudaSetDevice(self->gpu_id), "Unable to set cuda device");
+    
+    // 如果指定了网卡名称，绑定到该网卡
+    if (self->iface && strlen(self->iface) > 0)
+    {
+        struct ifreq ifr;
+        memset(&ifr, 0, sizeof(ifr));
+        strncpy(ifr.ifr_name, self->iface, IFNAMSIZ - 1);
+        
+        // 获取网卡索引
+        if (ioctl(self->sockfd, SIOCGIFINDEX, &ifr) < 0)
+        {
+            GST_ERROR("Failed to get interface %s index: %s", self->iface, strerror(errno));
+            goto error;
+        }
+        
+        // 绑定到指定网卡
+        if (setsockopt(self->sockfd, SOL_SOCKET, SO_BINDTODEVICE, 
+                      self->iface, strlen(self->iface)) < 0)
+        {
+            GST_WARNING("Failed to bind to interface %s: %s. Trying to continue...", 
+                       self->iface, strerror(errno));
+        }
+        else
+        {
+            GST_INFO("Successfully bound to interface %s", self->iface);
+        }
+        
+        // 设置组播发送接口
+        struct in_addr local_interface;
+        memset(&local_interface, 0, sizeof(local_interface));
+        
+        // 获取网卡IP地址
+        if (ioctl(self->sockfd, SIOCGIFADDR, &ifr) < 0)
+        {
+            GST_WARNING("Failed to get interface %s address: %s", self->iface, strerror(errno));
+        }
+        else
+        {
+            local_interface = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr;
+            
+            // 设置组播发送接口
+            if (setsockopt(self->sockfd, IPPROTO_IP, IP_MULTICAST_IF, 
+                          &local_interface, sizeof(local_interface)) < 0)
+            {
+                GST_WARNING("Failed to set multicast interface: %s", strerror(errno));
+            }
+            else
+            {
+                GST_INFO("Set multicast interface to %s (IP: %s)", 
+                        self->iface, inet_ntoa(local_interface));
+            }
+        }
+    }
+    
     return TRUE;
 error:
     return FALSE;
@@ -475,6 +538,10 @@ static void gst_udpmulticast_sink_set_property(GObject      *object,
         self->port = g_value_get_uint(value);
         self->multicast_addr.sin_port = htons(self->port);
         break;
+    case PROP_IFACE:
+        g_free(self->iface);
+        self->iface = g_value_dup_string(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
     }
@@ -497,6 +564,9 @@ static void gst_udpmulticast_sink_get_property(GObject    *object,
     case PROP_PORT:
         g_value_set_uint(value, self->port);
         break;
+    case PROP_IFACE:
+        g_value_set_string(value, self->iface);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
     }
@@ -511,6 +581,7 @@ static void gst_udpmulticast_sink_finalize(GObject *object)
         self->sockfd = -1;
     }
     g_clear_pointer(&self->ip, g_free);
+    g_clear_pointer(&self->iface, g_free);
     GST_DEBUG_OBJECT(self, "finalize");
     G_OBJECT_CLASS(parent_class)->finalize(object);
 }

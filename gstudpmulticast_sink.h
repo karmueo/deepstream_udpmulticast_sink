@@ -42,6 +42,7 @@ struct _Gstudpmulticast_sink
     // configurable multicast params
     gchar *ip;   // multicast ip string
     guint  port; // multicast port
+    gchar *iface; // multicast network interface name
 };
 
 struct _Gstudpmulticast_sinkClass
