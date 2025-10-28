@@ -2,93 +2,63 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <ctime>
-#include <iostream>
 #include <jsoncpp/json/reader.h>
 #include <jsoncpp/json/value.h>
 #include <jsoncpp/json/writer.h>
 #include <memory>
 #include <sstream>
-
-// 帧尾同步字
-const uint16_t FRAME_TAIL = 0x55AA;
-
-// 字节序转换宏
-#if defined(__linux__) || defined(__APPLE__)
-#include <byteswap.h>
-#define BSWAP_64(x) bswap_64(x)
-#elif defined(_WIN32)
-#include <stdlib.h>
-#define BSWAP_64(x) _byteswap_uint64(x)
-#else
-#define BSWAP_64(x)                                                            \
-    ((((x)&0xff00000000000000ull) >> 56) |                                     \
-     (((x)&0x00ff000000000000ull) >> 40) |                                     \
-     (((x)&0x0000ff0000000000ull) >> 24) |                                     \
-     (((x)&0x000000ff00000000ull) >> 8) | (((x)&0x00000000ff000000ull) << 8) | \
-     (((x)&0x0000000000ff0000ull) << 24) |                                     \
-     (((x)&0x000000000000ff00ull) << 40) |                                     \
-     (((x)&0x00000000000000ffull) << 56))
-#endif
+#include <sys/time.h>
 
 std::vector<uint8_t>
 EOProtocolParser::PackEOTargetMessage(const std::vector<EOTargetInfo> &targetInfos,
-                                      uint16_t                          sendCount,
-                                      uint8_t                           senderStation,
-                                      SystemType                        senderSystem,
-                                      uint8_t                           receiverStation,
-                                      SystemType                        receiverSystem,
-                                      uint8_t                           senderSubsystem,
-                                      uint8_t                           receiverSubsystem)
+                                      uint16_t                          sendCount)
 {
     // 如果没有目标信息，返回空消息
     if (targetInfos.empty()) {
         return std::vector<uint8_t>();
     }
 
-    // 创建JSON报文体 - 包含多个目标
-    Json::Value jsonBody;
-    jsonBody["targets"] = Json::Value(Json::arrayValue);
+    // 创建报文头
+    MessageHeader header;
+    FillMessageHeader(header, sendCount, static_cast<int>(targetInfos.size()));
+
+    // 创建JSON报文 - 包含报文头和目标数组
+    Json::Value jsonMessage;
     
+    // 添加报文头
+    jsonMessage["msg_id"] = header.msg_id;
+    jsonMessage["msg_sn"] = header.msg_sn;
+    jsonMessage["msg_type"] = header.msg_type;
+    jsonMessage["tx_sys_id"] = header.tx_sys_id;
+    jsonMessage["tx_dev_type"] = header.tx_dev_type;
+    jsonMessage["tx_dev_id"] = header.tx_dev_id;
+    jsonMessage["tx_subdev_id"] = header.tx_subdev_id;
+    jsonMessage["rx_sys_id"] = header.rx_sys_id;
+    jsonMessage["rx_dev_type"] = header.rx_dev_type;
+    jsonMessage["rx_dev_id"] = header.rx_dev_id;
+    jsonMessage["rx_subdev_id"] = header.rx_subdev_id;
+    jsonMessage["yr"] = header.yr;
+    jsonMessage["mo"] = header.mo;
+    jsonMessage["dy"] = header.dy;
+    jsonMessage["h"] = header.h;
+    jsonMessage["min"] = header.min;
+    jsonMessage["sec"] = header.sec;
+    jsonMessage["msec"] = header.msec;
+    jsonMessage["cont_type"] = header.cont_type;
+    jsonMessage["cont_sum"] = header.cont_sum;
+    
+    // 添加目标数组
+    jsonMessage["cont"] = Json::Value(Json::arrayValue);
     for (const auto& targetInfo : targetInfos) {
         Json::Value targetJson = CreateTargetInfoJson(targetInfo);
-        jsonBody["targets"].append(targetJson);
+        jsonMessage["cont"].append(targetJson);
     }
     
     auto        writerBuilder = GetWriterBuilder();
-    std::string jsonStr = Json::writeString(*writerBuilder, jsonBody);
+    std::string jsonStr = Json::writeString(*writerBuilder, jsonMessage);
 
-    // 计算报文总长度
-    uint16_t bodyLength = static_cast<uint16_t>(jsonStr.size());
-    uint16_t totalLength = sizeof(MessageHeader) + bodyLength +
-                           2 * sizeof(uint16_t); // 头+体+校验和+帧尾
-
-    // 准备报文缓冲区
-    std::vector<uint8_t> message(totalLength);
-    uint8_t             *data = message.data();
-
-    // 填充报文头
-    MessageHeader header;
-    FillMessageHeader(header, MessageID::TARGET_INFO, bodyLength, sendCount,
-                      MessageType::DATA_STREAM, senderStation, senderSystem,
-                      receiverStation, receiverSystem, GetCurrentTime(),
-                      senderSubsystem, receiverSubsystem);
-
-    // 拷贝报文头
-    std::memcpy(data, &header, sizeof(MessageHeader));
-    data += sizeof(MessageHeader);
-
-    // 拷贝JSON报文体
-    std::memcpy(data, jsonStr.c_str(), bodyLength);
-    data += bodyLength;
-
-    // 计算并填充校验和
-    uint16_t checksum =
-        CalculateChecksum(message.data(), sizeof(MessageHeader) + bodyLength);
-    *reinterpret_cast<uint16_t *>(data) = htons(checksum);
-    data += sizeof(uint16_t);
-
-    // 填充帧尾
-    *reinterpret_cast<uint16_t *>(data) = htons(FRAME_TAIL);
+    // 将JSON字符串转换为字节数组
+    std::vector<uint8_t> message(jsonStr.begin(), jsonStr.end());
 
     return message;
 }
@@ -98,84 +68,60 @@ bool EOProtocolParser::ParseEOTargetMessage(const uint8_t           *data,
                                             MessageHeader           &header,
                                             std::vector<EOTargetInfo> &targetInfos)
 {
-    if (length < sizeof(MessageHeader) + 2 * sizeof(uint16_t))
+    if (length < 10) // 至少需要一些数据
+    {
+        return false;
+    }
+
+    // 解析JSON报文
+    const char *jsonStr = reinterpret_cast<const char *>(data);
+    auto        readerBuilder = GetReaderBuilder();
+    Json::Value jsonMessage;
+    std::string errors;
+
+    std::istringstream jsonStream(std::string(jsonStr, length));
+    if (!Json::parseFromStream(*readerBuilder, jsonStream, &jsonMessage, &errors))
     {
         return false;
     }
 
     // 解析报文头
-    std::memcpy(&header, data, sizeof(MessageHeader));
-
-    // 字节序转换
-    header.messageID = ntohs(header.messageID);
-    header.messageLength = ntohs(header.messageLength);
-    header.sendCount = ntohs(header.sendCount);
-    header.msgType = ntohs(header.msgType);
-    header.sender.senderWord = ntohs(header.sender.senderWord);
-    header.receiver.receiverWord = ntohs(header.receiver.receiverWord);
-    header.time.timeWord = BSWAP_64(header.time.timeWord); // 64位字节序转换
-    header.subsystem.subsystemWord = ntohs(header.subsystem.subsystemWord);
-    header.backup1 = ntohs(header.backup1);
-    header.backup2 = ntohs(header.backup2);
-    header.backup3 = ntohs(header.backup3);
-    header.body.bodyInfoWord = ntohs(header.body.bodyInfoWord);
-    header.bodyCount = ntohs(header.bodyCount);
-
-    // 检查报文ID
-    if (header.messageID != static_cast<uint16_t>(MessageID::TARGET_INFO))
-    {
-        return false;
-    }
-
-    // 验证校验和
-    size_t dataLength = sizeof(MessageHeader) + header.body.bodyInfo.bodyLength;
-    uint16_t expectedChecksum = CalculateChecksum(data, dataLength);
-    uint16_t actualChecksum =
-        ntohs(*reinterpret_cast<const uint16_t *>(data + dataLength));
-
-    if (expectedChecksum != actualChecksum)
-    {
-        return false;
-    }
-
-    // 验证帧尾
-    if (!VerifyFrameTail(data, length))
-    {
-        return false;
-    }
-
-    // 解析JSON报文体
-    const char *jsonStr =
-        reinterpret_cast<const char *>(data + sizeof(MessageHeader));
-    auto        readerBuilder = GetReaderBuilder();
-    Json::Value jsonBody;
-    std::string errors;
-
-    std::istringstream jsonStream(
-        std::string(jsonStr, header.body.bodyInfo.bodyLength));
-    if (!Json::parseFromStream(*readerBuilder, jsonStream, &jsonBody, &errors))
-    {
+    try {
+        header.msg_id = jsonMessage["msg_id"].asInt();
+        header.msg_sn = jsonMessage["msg_sn"].asInt();
+        header.msg_type = jsonMessage["msg_type"].asInt();
+        header.tx_sys_id = jsonMessage["tx_sys_id"].asInt();
+        header.tx_dev_type = jsonMessage["tx_dev_type"].asInt();
+        header.tx_dev_id = jsonMessage["tx_dev_id"].asInt();
+        header.tx_subdev_id = jsonMessage["tx_subdev_id"].asInt();
+        header.rx_sys_id = jsonMessage["rx_sys_id"].asInt();
+        header.rx_dev_type = jsonMessage["rx_dev_type"].asInt();
+        header.rx_dev_id = jsonMessage["rx_dev_id"].asInt();
+        header.rx_subdev_id = jsonMessage["rx_subdev_id"].asInt();
+        header.yr = jsonMessage["yr"].asInt();
+        header.mo = jsonMessage["mo"].asInt();
+        header.dy = jsonMessage["dy"].asInt();
+        header.h = jsonMessage["h"].asInt();
+        header.min = jsonMessage["min"].asInt();
+        header.sec = jsonMessage["sec"].asInt();
+        header.msec = jsonMessage["msec"].asFloat();
+        header.cont_type = jsonMessage["cont_type"].asInt();
+        header.cont_sum = jsonMessage["cont_sum"].asInt();
+    } catch (...) {
         return false;
     }
 
     // 清空目标列表
     targetInfos.clear();
 
-    // 检查是否是多目标格式（包含targets数组）
-    if (jsonBody.isMember("targets") && jsonBody["targets"].isArray()) {
-        // 多目标格式
-        const Json::Value& targetsArray = jsonBody["targets"];
-        for (const auto& targetJson : targetsArray) {
+    // 解析目标数组
+    if (jsonMessage.isMember("cont") && jsonMessage["cont"].isArray()) {
+        const Json::Value& contArray = jsonMessage["cont"];
+        for (const auto& targetJson : contArray) {
             EOTargetInfo targetInfo;
             if (ParseTargetInfoFromJson(targetJson, targetInfo)) {
                 targetInfos.push_back(targetInfo);
             }
-        }
-    } else {
-        // 单目标格式（向后兼容）
-        EOTargetInfo targetInfo;
-        if (ParseTargetInfoFromJson(jsonBody, targetInfo)) {
-            targetInfos.push_back(targetInfo);
         }
     }
 
@@ -207,60 +153,44 @@ uint16_t EOProtocolParser::CalculateChecksum(const uint8_t *data, size_t length)
 
 bool EOProtocolParser::VerifyFrameTail(const uint8_t *data, size_t length)
 {
-    if (length < 2 * sizeof(uint16_t))
-    {
-        return false;
-    }
-
-    const uint16_t *frameTail =
-        reinterpret_cast<const uint16_t *>(data + length - sizeof(uint16_t));
-    return ntohs(*frameTail) == FRAME_TAIL;
+    // 保留用于兼容，新JSON格式不使用帧尾
+    return true;
 }
 
-void EOProtocolParser::FillMessageHeader(
-    MessageHeader                 &header,
-    MessageID                      messageID,
-    uint16_t                       bodyLength,
-    uint16_t                       sendCount,
-    MessageType                    msgType,
-    uint8_t                        senderStation,
-    SystemType                     senderSystem,
-    uint8_t                        receiverStation,
-    SystemType                     receiverSystem,
-    const MessageHeader::TimeInfo &timeInfo,
-    uint8_t                        senderSubsystem,
-    uint8_t                        receiverSubsystem)
+void EOProtocolParser::FillMessageHeader(MessageHeader &header,
+                                         int            msg_sn,
+                                         int            cont_sum)
 {
-    header.messageID = htons(static_cast<uint16_t>(messageID));
-    header.messageLength =
-        htons(sizeof(MessageHeader) + bodyLength + 2 * sizeof(uint16_t));
-    header.sendCount = htons(sendCount);
-    header.msgType = htons(static_cast<uint16_t>(msgType));
+    // 获取当前时间
+    std::time_t now = std::time(nullptr);
+    struct tm  *tm = std::localtime(&now);
+    
+    // 获取毫秒
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    float msec = tv.tv_usec / 1000.0f;
 
-    header.sender.senderInfo.stationID = senderStation;
-    header.sender.senderInfo.systemType = senderSystem;
-    header.sender.senderWord = htons(header.sender.senderWord);
-
-    header.receiver.receiverInfo.stationID = receiverStation;
-    header.receiver.receiverInfo.systemType = receiverSystem;
-    header.receiver.receiverWord = htons(header.receiver.receiverWord);
-
-    header.time.timeInfo = timeInfo;
-    header.time.timeWord = BSWAP_64(header.time.timeWord);
-
-    header.subsystem.subsystemInfo.senderSubsystem = senderSubsystem;
-    header.subsystem.subsystemInfo.receiverSubsystem = receiverSubsystem;
-    header.subsystem.subsystemWord = htons(header.subsystem.subsystemWord);
-
-    header.backup1 = 0;
-    header.backup2 = 0;
-    header.backup3 = 0;
-
-    header.body.bodyInfo.bodyType = static_cast<uint16_t>(BodyType::JSON);
-    header.body.bodyInfo.bodyLength = bodyLength;
-    header.body.bodyInfoWord = htons(header.body.bodyInfoWord);
-
-    header.bodyCount = htons(1);
+    // 填充报文头 - 按照需求设置固定值
+    header.msg_id = 0x7112;      // 固定为0x7112
+    header.msg_sn = msg_sn;      // 报文计数
+    header.msg_type = 3;         // 固定为3（数据流）
+    header.tx_sys_id = 0;        // 固定为0
+    header.tx_dev_type = 1;      // 固定为1（光电）
+    header.tx_dev_id = 0;        // 固定为0
+    header.tx_subdev_id = 0;     // 固定为0
+    header.rx_sys_id = 0;        // 固定为0
+    header.rx_dev_type = 1;      // 固定为1
+    header.rx_dev_id = 0;        // 固定为0
+    header.rx_subdev_id = 0;     // 固定为0
+    header.yr = tm->tm_year + 1900;  // 年
+    header.mo = tm->tm_mon + 1;      // 月
+    header.dy = tm->tm_mday;         // 日
+    header.h = tm->tm_hour;          // 时
+    header.min = tm->tm_min;         // 分
+    header.sec = tm->tm_sec;         // 秒
+    header.msec = msec;              // 毫秒
+    header.cont_type = 1;        // 固定为1（多信息）
+    header.cont_sum = cont_sum;  // 目标数量
 }
 
 bool EOProtocolParser::ParseTargetInfoFromJson(const Json::Value &json,
@@ -268,33 +198,36 @@ bool EOProtocolParser::ParseTargetInfoFromJson(const Json::Value &json,
 {
     try
     {
-        targetInfo.year = json["yr"].asInt();
-        targetInfo.month = json["mo"].asInt();
-        targetInfo.day = json["dy"].asInt();
-        targetInfo.hour = json["h"].asInt();
-        targetInfo.minute = json["min"].asInt();
-        targetInfo.second = json["sec"].asInt();
+        targetInfo.yr = json["yr"].asInt();
+        targetInfo.mo = json["mo"].asInt();
+        targetInfo.dy = json["dy"].asInt();
+        targetInfo.h = json["h"].asInt();
+        targetInfo.min = json["min"].asInt();
+        targetInfo.sec = json["sec"].asInt();
         targetInfo.msec = json["msec"].asFloat();
-        targetInfo.deviceType = static_cast<DeviceType>(json["dev_id"].asInt());
-        targetInfo.targetID = json["tar_id"].asInt();
-        targetInfo.targetStatus =
-            static_cast<TargetStatus>(json["trk_stat"].asInt());
-        targetInfo.trackMode = static_cast<TrackMode>(json["trk_mod"].asInt());
-        targetInfo.fovAngle = json["fov_angle"].asFloat();
-        targetInfo.longitude = json["lon"].asDouble();
-        targetInfo.latitude = json["lat"].asDouble();
-        targetInfo.altitude = json["alt"].asDouble();
-        targetInfo.fovHorizontal = json["fov_h"].asFloat();
-        targetInfo.fovVertical = json["fov_v"].asFloat();
-        targetInfo.enuAzimuth = json["enu_a"].asFloat();
-        targetInfo.enuElevation = json["enu_e"].asFloat();
-        targetInfo.offsetHorizontal = json["offset_h"].asInt();
-        targetInfo.offsetVertical = json["offset_v"].asInt();
-        targetInfo.targetRect = json["tar_rect"].asInt();
-        targetInfo.targetClass =
-            static_cast<TargetClass>(json["tar_class"].asInt());
-        targetInfo.targetConfidence = json["tar_dfid"].asFloat();
-        targetInfo.targetDistance = json["tar_mg"].asFloat();
+        targetInfo.dev_id = json["dev_id"].asInt();
+        targetInfo.guid_id = json["guid_id"].asInt();
+        targetInfo.tar_id = json["tar_id"].asInt();
+        targetInfo.trk_stat = json["trk_stat"].asInt();
+        targetInfo.trk_mod = json["trk_mod"].asInt();
+        targetInfo.fov_angle = json["fov_angle"].asDouble();
+        targetInfo.lon = json["lon"].asDouble();
+        targetInfo.lat = json["lat"].asDouble();
+        targetInfo.alt = json["alt"].asDouble();
+        targetInfo.tar_a = json["tar_a"].asDouble();
+        targetInfo.tar_e = json["tar_e"].asDouble();
+        targetInfo.tar_rng = json["tar_rng"].asDouble();
+        targetInfo.tar_av = json["tar_av"].asDouble();
+        targetInfo.tar_ev = json["tar_ev"].asDouble();
+        targetInfo.tar_rv = json["tar_rv"].asDouble();
+        targetInfo.tar_category = json["tar_category"].asInt();
+        targetInfo.tar_iden = json["tar_iden"].asString();
+        targetInfo.tar_cfid = json["tar_cfid"].asFloat();
+        targetInfo.fov_h = json["fov_h"].asDouble();
+        targetInfo.fov_v = json["fov_v"].asDouble();
+        targetInfo.offset_h = json["offset_h"].asInt();
+        targetInfo.offset_v = json["offset_v"].asInt();
+        targetInfo.tar_rect = json["tar_rect"].asInt();
 
         return true;
     }
@@ -308,50 +241,38 @@ Json::Value
 EOProtocolParser::CreateTargetInfoJson(const EOTargetInfo &targetInfo)
 {
     Json::Value json;
-    json["yr"] = targetInfo.year;
-    json["mo"] = targetInfo.month;
-    json["dy"] = targetInfo.day;
-    json["h"] = targetInfo.hour;
-    json["min"] = targetInfo.minute;
-    json["sec"] = targetInfo.second;
+    json["yr"] = targetInfo.yr;
+    json["mo"] = targetInfo.mo;
+    json["dy"] = targetInfo.dy;
+    json["h"] = targetInfo.h;
+    json["min"] = targetInfo.min;
+    json["sec"] = targetInfo.sec;
     json["msec"] = targetInfo.msec;
-    json["dev_id"] = static_cast<int>(targetInfo.deviceType);
-    json["tar_id"] = targetInfo.targetID;
-    json["trk_stat"] = static_cast<int>(targetInfo.targetStatus);
-    json["trk_mod"] = static_cast<int>(targetInfo.trackMode);
-    json["fov_angle"] = targetInfo.fovAngle;
-    json["lon"] = targetInfo.longitude;
-    json["lat"] = targetInfo.latitude;
-    json["alt"] = targetInfo.altitude;
-    json["fov_h"] = targetInfo.fovHorizontal;
-    json["fov_v"] = targetInfo.fovVertical;
-    json["enu_a"] = targetInfo.enuAzimuth;
-    json["enu_e"] = targetInfo.enuElevation;
-    json["offset_h"] = targetInfo.offsetHorizontal;
-    json["offset_v"] = targetInfo.offsetVertical;
-    json["tar_rect"] = targetInfo.targetRect;
-    json["tar_class"] = static_cast<int>(targetInfo.targetClass);
-    json["tar_dfid"] = targetInfo.targetConfidence;
-    json["tar_mg"] = targetInfo.targetDistance;
+    json["dev_id"] = targetInfo.dev_id;
+    json["guid_id"] = targetInfo.guid_id;
+    json["tar_id"] = targetInfo.tar_id;
+    json["trk_stat"] = targetInfo.trk_stat;
+    json["trk_mod"] = targetInfo.trk_mod;
+    json["fov_angle"] = targetInfo.fov_angle;
+    json["lon"] = targetInfo.lon;
+    json["lat"] = targetInfo.lat;
+    json["alt"] = targetInfo.alt;
+    json["tar_a"] = targetInfo.tar_a;
+    json["tar_e"] = targetInfo.tar_e;
+    json["tar_rng"] = targetInfo.tar_rng;
+    json["tar_av"] = targetInfo.tar_av;
+    json["tar_ev"] = targetInfo.tar_ev;
+    json["tar_rv"] = targetInfo.tar_rv;
+    json["tar_category"] = targetInfo.tar_category;
+    json["tar_iden"] = targetInfo.tar_iden;
+    json["tar_cfid"] = targetInfo.tar_cfid;
+    json["fov_h"] = targetInfo.fov_h;
+    json["fov_v"] = targetInfo.fov_v;
+    json["offset_h"] = targetInfo.offset_h;
+    json["offset_v"] = targetInfo.offset_v;
+    json["tar_rect"] = targetInfo.tar_rect;
 
     return json;
-}
-
-MessageHeader::TimeInfo EOProtocolParser::GetCurrentTime()
-{
-    std::time_t now = std::time(nullptr);
-    std::tm    *tm = std::localtime(&now);
-
-    MessageHeader::TimeInfo timeInfo;
-    timeInfo.year = static_cast<uint8_t>(tm->tm_year % 100); // 基于2000年
-    timeInfo.month = static_cast<uint8_t>(tm->tm_mon + 1);
-    timeInfo.day = static_cast<uint8_t>(tm->tm_mday);
-    timeInfo.hour = static_cast<uint8_t>(tm->tm_hour);
-    timeInfo.minute = static_cast<uint8_t>(tm->tm_min);
-    timeInfo.second = static_cast<uint8_t>(tm->tm_sec);
-    timeInfo.subSecond = 0; // 可根据需要填充毫秒信息
-
-    return timeInfo;
 }
 
 std::unique_ptr<Json::StreamWriterBuilder> EOProtocolParser::GetWriterBuilder()

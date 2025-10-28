@@ -133,13 +133,16 @@ void EOReceiver::recvLoop() {
             if (callback_) {
                 callback_(header, targets);
             } else {
-                std::cout << "Received EO Target Message: count=" << targets.size() << std::endl;
+                std::cout << "Received EO Target Message: msg_sn=" << header.msg_sn 
+                          << " cont_sum=" << header.cont_sum 
+                          << " targets=" << targets.size() << std::endl;
                 for (const auto& t : targets) {
-                    std::cout << "  ID=" << t.targetID
-                              << " class=" << static_cast<int>(t.targetClass)
-                              << " conf=" << t.targetConfidence
-                              << " offset(h,v)=" << t.offsetHorizontal << "," << t.offsetVertical
-                              << " rect=" << t.targetRect << std::endl;
+                    std::cout << "  tar_id=" << t.tar_id
+                              << " tar_category=" << t.tar_category
+                              << " tar_iden=" << t.tar_iden
+                              << " tar_cfid=" << t.tar_cfid
+                              << " offset_h=" << t.offset_h << " offset_v=" << t.offset_v
+                              << " tar_rect=" << t.tar_rect << std::endl;
                 }
             }
         } else {

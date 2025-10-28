@@ -298,58 +298,63 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
 
                 // 为当前目标创建EOTargetInfo并添加到向量中
                 EOTargetInfo targetInfo;
-                memset(&targetInfo, 0, sizeof(targetInfo));
+                // 不使用 memset，因为 EOTargetInfo 包含 std::string
 
                 // 填充时间信息
                 time_t     now = time(nullptr);
                 struct tm *tm_info = localtime(&now);
-                targetInfo.year = tm_info->tm_year + 1900;
-                targetInfo.month = tm_info->tm_mon + 1;
-                targetInfo.day = tm_info->tm_mday;
-                targetInfo.hour = tm_info->tm_hour;
-                targetInfo.minute = tm_info->tm_min;
-                targetInfo.second = tm_info->tm_sec;
+                targetInfo.yr = tm_info->tm_year + 1900;
+                targetInfo.mo = tm_info->tm_mon + 1;
+                targetInfo.dy = tm_info->tm_mday;
+                targetInfo.h = tm_info->tm_hour;
+                targetInfo.min = tm_info->tm_min;
+                targetInfo.sec = tm_info->tm_sec;
                 targetInfo.msec = 0.0f;
 
-                // 填充设备和目标信息
-                targetInfo.deviceType = DeviceType::VISIBLE_LIGHT;
-                targetInfo.targetID = obj_meta->object_id; // 使用目标ID
-                targetInfo.targetStatus = TargetStatus::NORMAL;
-                targetInfo.trackMode = TrackMode::DETECTION_TRACK;
+                // 填充设备和目标信息 - 按照要求设置固定值
+                targetInfo.dev_id = 0;        // 固定为0（可见光）
+                targetInfo.guid_id = 0;       // 固定为0
+                targetInfo.tar_id = 0;        // 固定为0
+                targetInfo.trk_stat = 1;      // 固定为1（正常）
+                targetInfo.trk_mod = 0;       // 固定为0（检测跟踪）
 
-                // 填充位置信息（示例值）
-                // targetInfo.fovAngle = 45.0f;
-                // targetInfo.longitude = 116.404;
-                // targetInfo.latitude = 39.915;
-                // targetInfo.altitude = 50.0;
-                // targetInfo.fovHorizontal = 0.0f;
-                // targetInfo.fovVertical = 0.0f;
-                // targetInfo.enuAzimuth = 0.0f;
-                // targetInfo.enuElevation = 0.0f;
+                // 填充位置信息 - 按照要求设置为0
+                targetInfo.fov_angle = 0.0;
+                targetInfo.lon = 0.0;
+                targetInfo.lat = 0.0;
+                targetInfo.alt = 0.0;
+                targetInfo.tar_a = 0.0;
+                targetInfo.tar_e = 0.0;
+                targetInfo.tar_rng = 0.0;     // 没有距离信息填0
+                targetInfo.tar_av = 0.0;
+                targetInfo.tar_ev = 0.0;
+                targetInfo.tar_rv = 0.0;      // 没有距离信息填0
+                targetInfo.fov_h = 0.0;
+                targetInfo.fov_v = 0.0;
 
                 // 填充目标检测信息
-                targetInfo.offsetHorizontal =
-                    (int)(obj_meta->rect_params.left + obj_meta->rect_params.width / 2);
-                targetInfo.offsetVertical =
-                    (int)(obj_meta->rect_params.top + obj_meta->rect_params.height / 2);
-                targetInfo.targetRect = (int)(obj_meta->rect_params.width * obj_meta->rect_params.height);
+                targetInfo.offset_h = 0;      // 固定为0
+                targetInfo.offset_v = 0;      // 固定为0
+                targetInfo.tar_rect = (int)(obj_meta->rect_params.left + obj_meta->rect_params.width / 2);  // 目标中心的像素值
 
-                // 映射目标类型
+                // 映射目标类型 - 继续保持TargetClass
                 switch (obj_meta->class_id)
                 {
                 case 0:
-                    targetInfo.targetClass = TargetClass::SMALL_BIRD;
+                    targetInfo.tar_category = static_cast<int>(TargetClass::SMALL_BIRD);
+                    targetInfo.tar_iden = "bird";
                     break;
                 case 1:
-                    targetInfo.targetClass = TargetClass::UAV;
+                    targetInfo.tar_category = static_cast<int>(TargetClass::UAV);
+                    targetInfo.tar_iden = "uav";
                     break;
                 default:
-                    targetInfo.targetClass = TargetClass::UNKNOWN;
+                    targetInfo.tar_category = static_cast<int>(TargetClass::UNKNOWN);
+                    targetInfo.tar_iden = "unknown";
                     break;
                 }
 
-                targetInfo.targetConfidence = obj_meta->confidence;
-                // targetInfo.targetDistance = 1000.0f;
+                targetInfo.tar_cfid = obj_meta->confidence;
 
                 // 添加到目标列表
                 targetInfos.push_back(targetInfo);
@@ -362,15 +367,7 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
             static uint16_t sendCount = 0;
             sendCount++;
             std::vector<uint8_t> message =
-                EOProtocolParser::PackEOTargetMessage(
-                    targetInfos, sendCount,
-                    0,                  // 发送方站号
-                    SystemType::EO,     // 光电系统
-                    0,                  // 接收方站号
-                    SystemType::FUSION, // 融合系统
-                    0,                  // 发送子系统
-                    0                   // 接收子系统
-                );
+                EOProtocolParser::PackEOTargetMessage(targetInfos, sendCount);
 
             // 发送打包后的报文
             if (!message.empty())

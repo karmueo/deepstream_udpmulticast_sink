@@ -27,13 +27,17 @@ int main(int argc, char** argv) {
     EOReceiver receiver(ip, port, bind_if);
     receiver.setCallback([](const MessageHeader& header, const std::vector<EOTargetInfo>& targets){
         std::cout << "---- Parsed Message ----" << std::endl;
-        std::cout << "SendCount=" << header.sendCount << " Targets=" << targets.size() << std::endl;
+        std::cout << "msg_id=0x" << std::hex << header.msg_id << std::dec 
+                  << " msg_sn=" << header.msg_sn
+                  << " cont_sum=" << header.cont_sum 
+                  << " Targets=" << targets.size() << std::endl;
         for (const auto& t : targets) {
-            std::cout << "ID=" << t.targetID
-                      << " Class=" << static_cast<int>(t.targetClass)
-                      << " Conf=" << t.targetConfidence
-                      << " Offset=" << t.offsetHorizontal << "," << t.offsetVertical
-                      << " Rect=" << t.targetRect
+            std::cout << "tar_id=" << t.tar_id
+                      << " tar_category=" << t.tar_category
+                      << " tar_iden=" << t.tar_iden
+                      << " tar_cfid=" << t.tar_cfid
+                      << " offset_h=" << t.offset_h << " offset_v=" << t.offset_v
+                      << " tar_rect=" << t.tar_rect
                       << std::endl;
         }
     });

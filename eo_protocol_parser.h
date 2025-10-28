@@ -101,159 +101,92 @@ enum class DeviceType : int
     THERMAL_IMAGING = 1 // 1热成像
 };
 
-// 报文头结构体
-#pragma pack(push, 1)
+// 报文头结构体（JSON格式）
 struct MessageHeader
 {
-    uint16_t messageID;     // 报文ID (字0)
-    uint16_t messageLength; // 报文长度 (字1)
-    uint16_t sendCount;     // 报文发送计数 (字2)
-    uint16_t msgType;       // 消息类型 (字3)
-
-    // 发送标识 (字4)
-    struct SenderInfo
-    {
-        uint8_t    stationID;  // 站号 (b0-b7)
-        SystemType systemType; // 系统类型 (b8-b15)
-    };
-    union SenderUnion
-    {
-        uint16_t   senderWord;
-        SenderInfo senderInfo;
-    } sender;
-
-    // 接收标识 (字5)
-    struct ReceiverInfo
-    {
-        uint8_t    stationID;  // 站号 (b0-b7)
-        SystemType systemType; // 系统类型 (b8-b15)
-    };
-    union ReceiverUnion
-    {
-        uint16_t     receiverWord;
-        ReceiverInfo receiverInfo;
-    } receiver;
-
-    // 发送时间 (字6-9)
-    struct TimeInfo
-    {
-        uint8_t  year;      // 年 (基年:2000) (字6 b0-b7)
-        uint8_t  month;     // 月 (字6 b8-b15)
-        uint8_t  day;       // 日 (字7 b0-b7)
-        uint8_t  hour;      // 时 (字7 b8-b15)
-        uint8_t  minute;    // 分 (字8 b0-b7)
-        uint8_t  second;    // 秒 (字8 b8-b15)
-        uint16_t subSecond; // 秒以下 (量化单位:25us) (字9)
-    };
-    union TimeUnion
-    {
-        uint64_t timeWord;
-        TimeInfo timeInfo;
-    } time;
-
-    // 内部分系统 (字10)
-    struct SubsystemInfo
-    {
-        uint8_t senderSubsystem;   // 发端,内部分系统 (b0-b7)
-        uint8_t receiverSubsystem; // 收端,内部分系统 (b8-b15)
-    };
-    union SubsystemUnion
-    {
-        uint16_t      subsystemWord;
-        SubsystemInfo subsystemInfo;
-    } subsystem;
-
-    uint16_t backup1; // 备份 (字11)
-    uint16_t backup2; // 备份 (字12)
-    uint16_t backup3; // 备份 (字13)
-
-    // 报文类型和长度 (字14)
-    struct BodyInfo
-    {
-        uint16_t bodyType : 4;    // 类型 (b0-b3)
-        uint16_t bodyLength : 12; // 单报文体长度 (b4-b15)
-    };
-    union BodyUnion
-    {
-        uint16_t bodyInfoWord;
-        BodyInfo bodyInfo;
-    } body;
-
-    uint16_t bodyCount; // 报文体数 (字15)
+    int   msg_id;       // 报文ID, 唯一标识（整型），固定为0x7112
+    int   msg_sn;       // 报文计数（整型）
+    int   msg_type;     // 报文类型, 0：控制；1：回馈；2：查询；3数据流（备份）（整型），固定为3
+    int   tx_sys_id;    // 系统号（整型），固定为0
+    int   tx_dev_type;  // 0-雷达 1-光电 2-侦收 3-融合 4-无人机（反制）5-ads-b 6-ais 7-干扰反制（整型），固定为1
+    int   tx_dev_id;    // 每个设备编号（根据系统要求编），固定为0
+    int   tx_subdev_id; // 参见雷达分系统编号（光电0-可见光，1-红外，2-测距；侦收  0-定向 1-定位），固定为0
+    int   rx_sys_id;    // 系统号（整型），999-不指定，固定为0
+    int   rx_dev_type;  // 0-雷达 1-光电 2-侦收 3-融合 4-无人机（反制）5-ads-b 6-ais 7-干扰反制, 999-不指定（整型），固定为1
+    int   rx_dev_id;    // 每个设备编号（根据系统要求编），999-不指定，固定为0
+    int   rx_subdev_id; // 参见雷达分系统编号（光电0-可见光，1-红外，2-测距；侦收  0-定向 1-定位），999-不指定，固定为0
+    int   yr;           // 年（整型）
+    int   mo;           // 月（整型）
+    int   dy;           // 日（整型）
+    int   h;            // 时（整型）
+    int   min;          // 分（整型）
+    int   sec;          // 秒（整型）
+    float msec;         // 毫秒（单精度浮点）
+    int   cont_type;    // 信息类型，0单信息，1多信息，固定为1
+    int   cont_sum;     // 目标数量
 };
-#pragma pack(pop)
 
 // 光电目标信息结构体
 struct EOTargetInfo
 {
-    int          year;             // 年
-    int          month;            // 月
-    int          day;              // 日
-    int          hour;             // 时
-    int          minute;           // 分
-    int          second;           // 秒
-    float        msec;             // 毫秒
-    DeviceType   deviceType;       // 设备类型
-    int          targetID;         // 引导批号
-    TargetStatus targetStatus;     // 目标状态
-    TrackMode    trackMode;        // 跟踪模式
-    float        fovAngle;         // 视场
-    double       longitude;        // 站址经度
-    double       latitude;         // 站址纬度
-    double       altitude;         // 站址海拔高度
-    float        fovHorizontal;    // 视场中心水平角度
-    float        fovVertical;      // 视场中心垂直角度
-    float        enuAzimuth;       // 目标水平角
-    float        enuElevation;     // 目标垂直角
-    int          offsetHorizontal; // 水平脱靶量
-    int          offsetVertical;   // 垂直脱靶量
-    int          targetRect;       // 目标位置元素
-    TargetClass  targetClass;      // 目标类型
-    float        targetConfidence; // 目标置信度
-    float        targetDistance;   // 目标距离
+    int          yr;            // 年（整型）
+    int          mo;            // 月（整型）
+    int          dy;            // 日（整型）
+    int          h;             // 时（整型）
+    int          min;           // 分（整型）
+    int          sec;           // 秒（整型）
+    float        msec;          // 毫秒（单精度浮点）
+    int          dev_id;        // 设备类型，0可见光，1热成像（整型），固定为0
+    int          guid_id;       // 引导批号（整型），自主跟踪0，固定为0
+    int          tar_id;        // 目标批号（整型），固定为0
+    int          trk_stat;      // 目标状态，1正常，0丢失，2外推（整型），固定为1
+    int          trk_mod;       // 0检测跟踪，1识别跟踪（整型），固定为0
+    double       fov_angle;     // 视场（双精度浮点），固定为0
+    double       lon;           // 站址经度（精度≤1e-7）（双精度浮点），0
+    double       lat;           // 站址纬度（精度≤1e-7）（双精度浮点），0
+    double       alt;           // 站址海拔高度，单位米（精度≤1e-2）（双精度浮点），0
+    double       tar_a;         // 目标水平角，度（双精度浮点），0
+    double       tar_e;         // 目标垂直角，度（双精度浮点），0
+    double       tar_rng;       // 目标距离，单位米，没有距离信息填0（双精度浮点）
+    double       tar_av;        // 目标水平角速度，度（双精度浮点），0
+    double       tar_ev;        // 目标垂直角速度，度（双精度浮点），0
+    double       tar_rv;        // 目标径向速度，单位米/s，没有距离信息填0（双精度浮点）
+    int          tar_category;  // 目标类型（整型）- 继续保持TargetClass
+    std::string  tar_iden;      // 目标具体型号（字符串），bird或者uav
+    float        tar_cfid;      // 目标置信度（单精度浮点）
+    double       fov_h;         // 视场中心水平角度，单位度（双精度浮点）0
+    double       fov_v;         // 视场中心垂直角度（双精度浮点）0
+    int          offset_h;      // 水平脱靶量（整型）0
+    int          offset_v;      // 垂直脱靶量（整型）0
+    int          tar_rect;      // 目标位置，元素（整型），目标中心的像素值
 };
 
 // 光电报文封装和解析类
 class EOProtocolParser
 {
   public:
-    // 封装光电目标信息报文（多目标）
+    // 封装光电目标信息报文（多目标）- 新JSON格式
     static std::vector<uint8_t>
     PackEOTargetMessage(const std::vector<EOTargetInfo> &targetInfos,
-                        uint16_t                          sendCount,
-                        uint8_t                           senderStation,
-                        SystemType                        senderSystem,
-                        uint8_t                           receiverStation,
-                        SystemType                        receiverSystem,
-                        uint8_t                           senderSubsystem = 0,
-                        uint8_t                           receiverSubsystem = 0);
+                        uint16_t                          sendCount);
 
-    // 解析光电目标信息报文（多目标）
+    // 解析光电目标信息报文（多目标）- 新JSON格式
     static bool ParseEOTargetMessage(const uint8_t           *data,
                                      size_t                   length,
                                      MessageHeader           &header,
                                      std::vector<EOTargetInfo> &targetInfos);
 
-    // 计算校验和
+    // 计算校验和（保留用于兼容）
     static uint16_t CalculateChecksum(const uint8_t *data, size_t length);
 
-    // 验证帧尾
+    // 验证帧尾（保留用于兼容）
     static bool VerifyFrameTail(const uint8_t *data, size_t length);
 
   private:
     // 填充报文头
     static void FillMessageHeader(MessageHeader &header,
-                                  MessageID      messageID,
-                                  uint16_t       bodyLength,
-                                  uint16_t       sendCount,
-                                  MessageType    msgType,
-                                  uint8_t        senderStation,
-                                  SystemType     senderSystem,
-                                  uint8_t        receiverStation,
-                                  SystemType     receiverSystem,
-                                  const MessageHeader::TimeInfo &timeInfo,
-                                  uint8_t senderSubsystem,
-                                  uint8_t receiverSubsystem);
+                                  int            msg_sn,
+                                  int            cont_sum);
 
     // 从JSON解析目标信息
     static bool ParseTargetInfoFromJson(const Json::Value &json,
@@ -262,8 +195,8 @@ class EOProtocolParser
     // 生成目标信息的JSON
     static Json::Value CreateTargetInfoJson(const EOTargetInfo &targetInfo);
 
-    // 获取当前时间信息
-    static MessageHeader::TimeInfo GetCurrentTime();
+    // 生成报文头的JSON
+    static Json::Value CreateMessageHeaderJson(const MessageHeader &header);
 
     // JSON 写入器构建器
     static std::unique_ptr<Json::StreamWriterBuilder> GetWriterBuilder();
