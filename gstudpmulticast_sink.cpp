@@ -35,6 +35,7 @@
 #include <math.h>
 #include <net/if.h>
 #include <sys/ioctl.h>
+#include <sys/time.h>
 
 /* enable to write transformed cvmat to files */
 /* #define DSEXAMPLE_DEBUG */
@@ -300,22 +301,24 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
                 EOTargetInfo targetInfo;
                 // 不使用 memset，因为 EOTargetInfo 包含 std::string
 
-                // 填充时间信息
-                time_t     now = time(nullptr);
-                struct tm *tm_info = localtime(&now);
-                targetInfo.yr = tm_info->tm_year + 1900;
-                targetInfo.mo = tm_info->tm_mon + 1;
-                targetInfo.dy = tm_info->tm_mday;
-                targetInfo.h = tm_info->tm_hour;
-                targetInfo.min = tm_info->tm_min;
-                targetInfo.sec = tm_info->tm_sec;
-                targetInfo.msec = 0.0f;
+                // 填充时间信息（精确到毫秒）
+                struct timeval tv;
+                gettimeofday(&tv, NULL);
+                struct tm tm_info;
+                localtime_r(&tv.tv_sec, &tm_info);
+                targetInfo.yr = tm_info.tm_year + 1900;
+                targetInfo.mo = tm_info.tm_mon + 1;
+                targetInfo.dy = tm_info.tm_mday;
+                targetInfo.h = tm_info.tm_hour;
+                targetInfo.min = tm_info.tm_min;
+                targetInfo.sec = tm_info.tm_sec;
+                targetInfo.msec = tv.tv_usec / 1000.0f; // 毫秒
 
                 // 填充设备和目标信息 - 按照要求设置固定值
                 targetInfo.dev_id = 0;        // 固定为0（可见光）
                 targetInfo.guid_id = 0;       // 固定为0
                 targetInfo.tar_id = 0;        // 固定为0
-                targetInfo.trk_stat = 1;      // 固定为1（正常）
+                targetInfo.trk_stat = 1;      // 默认正常，后续根据置信度调整
                 targetInfo.trk_mod = 0;       // 固定为0（检测跟踪）
 
                 // 填充位置信息 - 按照要求设置为0
@@ -355,6 +358,8 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
                 }
 
                 targetInfo.tar_cfid = obj_meta->confidence;
+                // 当目标置信度小于0时，trk_stat置2（外推）；其他情况为1（正常）
+                targetInfo.trk_stat = (targetInfo.tar_cfid < 0.0f) ? 2 : 1;
 
                 // 添加到目标列表
                 targetInfos.push_back(targetInfo);

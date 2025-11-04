@@ -139,7 +139,7 @@ struct EOTargetInfo
     int          dev_id;        // 设备类型，0可见光，1热成像（整型），固定为0
     int          guid_id;       // 引导批号（整型），自主跟踪0，固定为0
     int          tar_id;        // 目标批号（整型），固定为0
-    int          trk_stat;      // 目标状态，1正常，0丢失，2外推（整型），固定为1
+    int          trk_stat;      // 目标状态，1正常，0丢失，2外推（整型）；当置信度<0置2，否则为1
     int          trk_mod;       // 0检测跟踪，1识别跟踪（整型），固定为0
     double       fov_angle;     // 视场（双精度浮点），固定为0
     double       lon;           // 站址经度（精度≤1e-7）（双精度浮点），0
