@@ -12,7 +12,7 @@ static void handleSig(int){ g_stop = true; }
 int main(int argc, char** argv) {
     std::string ip = "239.255.10.10";
     uint16_t port = 6000;
-    std::string bind_if = "eno2";  // 绑定网卡名
+    std::string bind_if = "";  // 绑定网卡名，如果不指定则使用默认网卡
     
     if (argc > 1) ip = argv[1];
     if (argc > 2) port = static_cast<uint16_t>(std::stoi(argv[2]));
