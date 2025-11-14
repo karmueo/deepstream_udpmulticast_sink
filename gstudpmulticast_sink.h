@@ -43,6 +43,8 @@ struct _Gstudpmulticast_sink
     gchar *ip;   // multicast ip string
     guint  port; // multicast port
     gchar *iface; // multicast network interface name
+    guint  fps;  // report rate in frames per second (default: 25)
+    gdouble last_send_time; // timestamp of last sent message (in seconds)
 };
 
 struct _Gstudpmulticast_sinkClass

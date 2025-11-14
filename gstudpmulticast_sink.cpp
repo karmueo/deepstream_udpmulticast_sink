@@ -19,8 +19,8 @@
 #include <gst/gstinfo.h>
 // #include "nvdsmeta.h"
 #include "eo_protocol_parser.h"
-#include "gstudpmulticast_sink.h"
 #include "gstnvdsmeta.h"
+#include "gstudpmulticast_sink.h"
 #include "nvbufsurface.h"
 #include <gst/base/gstbasetransform.h>
 #include <gst/gstelement.h>
@@ -71,7 +71,8 @@ enum
     PROP_SILENT,
     PROP_IP,
     PROP_PORT,
-    PROP_IFACE
+    PROP_IFACE,
+    PROP_FPS
 };
 
 /* the capabilities of the inputs and outputs.
@@ -82,21 +83,23 @@ static GstStaticPadTemplate sink_factory = GST_STATIC_PAD_TEMPLATE(
     "sink", GST_PAD_SINK, GST_PAD_ALWAYS, GST_STATIC_CAPS("ANY"));
 
 static void gst_udpmulticast_sink_set_property(GObject      *object,
-                                       guint         property_id,
-                                       const GValue *value,
-                                       GParamSpec   *pspec);
+                                               guint         property_id,
+                                               const GValue *value,
+                                               GParamSpec   *pspec);
 static void gst_udpmulticast_sink_get_property(GObject    *object,
-                                       guint       property_id,
-                                       GValue     *value,
-                                       GParamSpec *pspec);
+                                               guint       property_id,
+                                               GValue     *value,
+                                               GParamSpec *pspec);
 static void gst_udpmulticast_sink_finalize(GObject *object);
 
 #define gst_udpmulticast_sink_parent_class parent_class
 G_DEFINE_TYPE(Gstudpmulticast_sink, gst_udpmulticast_sink, GST_TYPE_BASE_SINK);
 
-static gboolean gst_udpmulticast_sink_set_caps(GstBaseSink *sink, GstCaps *caps);
+static gboolean gst_udpmulticast_sink_set_caps(GstBaseSink *sink,
+                                               GstCaps     *caps);
 
-static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *buf);
+static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
+                                                  GstBuffer   *buf);
 static gboolean      gst_udpmulticast_sink_start(GstBaseSink *sink);
 static gboolean      gst_udpmulticast_sink_stop(GstBaseSink *sink);
 
@@ -118,14 +121,16 @@ static void gst_udpmulticast_sink_class_init(Gstudpmulticast_sinkClass *klass)
     base_sink_class->render = GST_DEBUG_FUNCPTR(gst_udpmulticast_sink_render);
     base_sink_class->start = GST_DEBUG_FUNCPTR(gst_udpmulticast_sink_start);
     base_sink_class->stop = GST_DEBUG_FUNCPTR(gst_udpmulticast_sink_stop);
-    base_sink_class->set_caps = GST_DEBUG_FUNCPTR(gst_udpmulticast_sink_set_caps);
+    base_sink_class->set_caps =
+        GST_DEBUG_FUNCPTR(gst_udpmulticast_sink_set_caps);
 
     gst_element_class_add_static_pad_template(GST_ELEMENT_CLASS(klass),
                                               &sink_factory);
 
     /* Set metadata describing the element */
     gst_element_class_set_details_simple(
-        gstelement_class, "DsUdpMulticastSink plugin", "DsUdpMulticastSink Plugin",
+        gstelement_class, "DsUdpMulticastSink plugin",
+        "DsUdpMulticastSink Plugin",
         "Process a infer mst network on objects / full frame",
         "ShenChangli "
         "@ karmueo@163.com");
@@ -148,7 +153,8 @@ static void gst_udpmulticast_sink_class_init(Gstudpmulticast_sinkClass *klass)
     g_object_class_install_property(
         gobject_class, PROP_IFACE,
         g_param_spec_string(
-            "iface", "Network Interface", "Network interface name for multicast (e.g., eth0, enp5s0)", NULL,
+            "iface", "Network Interface",
+            "Network interface name for multicast (e.g., eth0, enp5s0)", NULL,
             (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
     _detctAnalysis.minPixel = 9999;
@@ -171,6 +177,8 @@ static void gst_udpmulticast_sink_init(Gstudpmulticast_sink *self)
     self->ip = g_strdup("239.255.255.250");
     self->port = 5000;
     self->iface = NULL;
+    self->fps = 25;
+    self->last_send_time = 0.0;
 
     // 创建UDP Socket
     self->sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -203,17 +211,18 @@ static void gst_udpmulticast_sink_init(Gstudpmulticast_sink *self)
 /**
  * 当元素从上游元素接收到输入缓冲区时调用。
  */
-static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *buf)
+static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
+                                                  GstBuffer   *buf)
 {
     Gstudpmulticast_sink *self = GST_UDPMULTICAST_SINK(sink);
 
-    NvDsBatchMeta  *batch_meta = NULL;
-    NvDsMetaList   *l_frame = NULL;
-    NvDsFrameMeta  *frame_meta = NULL;
-    NvDsMetaList   *l_obj = NULL;
-    NvDsObjectMeta *obj_meta = NULL;
-    NvBufSurface *surface = NULL;
-    GstMapInfo    in_map_info;
+    NvDsBatchMeta            *batch_meta = NULL;
+    NvDsMetaList             *l_frame = NULL;
+    NvDsFrameMeta            *frame_meta = NULL;
+    NvDsMetaList             *l_obj = NULL;
+    NvDsObjectMeta           *obj_meta = NULL;
+    NvBufSurface             *surface = NULL;
+    GstMapInfo                in_map_info;
     std::vector<EOTargetInfo> targetInfos;
 
     memset(&in_map_info, 0, sizeof(in_map_info));
@@ -237,6 +246,23 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
     {
         frame_meta = (NvDsFrameMeta *)(l_frame->data);
         _detctAnalysis.frameNum = frame_meta->frame_num + 1;
+        
+        // 基于时间的帧率控制：不依赖输入帧率
+        struct timeval tv_now;
+        gettimeofday(&tv_now, NULL);
+        gdouble current_time = tv_now.tv_sec + tv_now.tv_usec / 1000000.0;
+        
+        // 计算距离上次发送的时间间隔
+        gdouble time_since_last_send = current_time - self->last_send_time;
+        gdouble send_interval = (self->fps > 0) ? (1.0 / self->fps) : 0.04; // 默认25fps = 0.04秒
+        
+        // 判断是否应该发送（时间间隔大于等于发送间隔）
+        gboolean should_send = (self->last_send_time == 0.0 || time_since_last_send >= send_interval);
+        
+        if (should_send) {
+            self->last_send_time = current_time;
+        }
+        
         // 获取源分辨率
         guint source_width = frame_meta->source_frame_width;
         guint source_height = frame_meta->source_frame_height;
@@ -253,7 +279,8 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
                 // 为每个检测目标构造并发送EOTargetInfo
                 // 统计检测识别
                 std::map<guint16, guint>::iterator it =
-                    _detctAnalysis.primaryClassCountMap.find(obj_meta->class_id);
+                    _detctAnalysis.primaryClassCountMap.find(
+                        obj_meta->class_id);
                 if (it != _detctAnalysis.primaryClassCountMap.end())
                 {
                     // 如果找到了，就+1
@@ -271,7 +298,8 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
                 for (NvDsMetaList *l_class = obj_meta->classifier_meta_list;
                      l_class != NULL; l_class = l_class->next)
                 {
-                    NvDsClassifierMeta *cmeta = (NvDsClassifierMeta *)l_class->data;
+                    NvDsClassifierMeta *cmeta =
+                        (NvDsClassifierMeta *)l_class->data;
                     for (NvDsMetaList *l_label = cmeta->label_info_list;
                          l_label != NULL; l_label = l_label->next)
                     {
@@ -283,19 +311,22 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
                             it2->second++;
                         else
                             _detctAnalysis.secondaryClassCountMap.insert(
-                                std::pair<guint16, guint>(label->result_class_id, 1));
+                                std::pair<guint16, guint>(
+                                    label->result_class_id, 1));
                     }
                 }
 
                 // 记录最像素数和平均像素数
-                guint16 pixel = obj_meta->rect_params.width * obj_meta->rect_params.height;
+                guint16 pixel =
+                    obj_meta->rect_params.width * obj_meta->rect_params.height;
                 if (pixel < _detctAnalysis.minPixel)
                 {
                     _detctAnalysis.minPixel = pixel;
                 }
                 guint totalObjNum = _detctAnalysis.primaryClassCountMap.size();
                 _detctAnalysis.meanPixel =
-                    (_detctAnalysis.meanPixel * (totalObjNum - 1) + pixel) / totalObjNum;
+                    (_detctAnalysis.meanPixel * (totalObjNum - 1) + pixel) /
+                    totalObjNum;
 
                 // 为当前目标创建EOTargetInfo并添加到向量中
                 EOTargetInfo targetInfo;
@@ -315,11 +346,11 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
                 targetInfo.msec = tv.tv_usec / 1000.0f; // 毫秒
 
                 // 填充设备和目标信息 - 按照要求设置固定值
-                targetInfo.dev_id = 0;        // 固定为0（可见光）
-                targetInfo.guid_id = 0;       // 固定为0
-                targetInfo.tar_id = 0;        // 固定为0
-                targetInfo.trk_stat = 1;      // 默认正常，后续根据置信度调整
-                targetInfo.trk_mod = 0;       // 固定为0（检测跟踪）
+                targetInfo.dev_id = 0;   // 固定为0（可见光）
+                targetInfo.guid_id = 0;  // 固定为0
+                targetInfo.tar_id = 0;   // 固定为0
+                targetInfo.trk_stat = 1; // 默认正常，后续根据置信度调整
+                targetInfo.trk_mod = 0;  // 固定为0（检测跟踪）
 
                 // 填充位置信息 - 按照要求设置为0
                 targetInfo.fov_angle = 0.0;
@@ -328,31 +359,36 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
                 targetInfo.alt = 0.0;
                 targetInfo.tar_a = 0.0;
                 targetInfo.tar_e = 0.0;
-                targetInfo.tar_rng = 0.0;     // 没有距离信息填0
+                targetInfo.tar_rng = 0.0; // 没有距离信息填0
                 targetInfo.tar_av = 0.0;
                 targetInfo.tar_ev = 0.0;
-                targetInfo.tar_rv = 0.0;      // 没有距离信息填0
+                targetInfo.tar_rv = 0.0; // 没有距离信息填0
                 targetInfo.fov_h = 0.0;
                 targetInfo.fov_v = 0.0;
 
                 // 填充目标检测信息
-                targetInfo.offset_h = 0;      // 固定为0
-                targetInfo.offset_v = 0;      // 固定为0
-                targetInfo.tar_rect = (int)(obj_meta->rect_params.left + obj_meta->rect_params.width / 2);  // 目标中心的像素值
+                targetInfo.offset_h = 0; // 固定为0
+                targetInfo.offset_v = 0; // 固定为0
+                targetInfo.tar_rect =
+                    (int)(obj_meta->rect_params.left +
+                          obj_meta->rect_params.width / 2); // 目标中心的像素值
 
                 // 映射目标类型 - 继续保持TargetClass
                 switch (obj_meta->class_id)
                 {
                 case 0:
-                    targetInfo.tar_category = static_cast<int>(TargetClass::SMALL_BIRD);
+                    targetInfo.tar_category =
+                        static_cast<int>(TargetClass::SMALL_BIRD);
                     targetInfo.tar_iden = "bird";
                     break;
                 case 1:
-                    targetInfo.tar_category = static_cast<int>(TargetClass::UAV);
+                    targetInfo.tar_category =
+                        static_cast<int>(TargetClass::UAV);
                     targetInfo.tar_iden = "uav";
                     break;
                 default:
-                    targetInfo.tar_category = static_cast<int>(TargetClass::UNKNOWN);
+                    targetInfo.tar_category =
+                        static_cast<int>(TargetClass::UNKNOWN);
                     targetInfo.tar_iden = "unknown";
                     break;
                 }
@@ -370,7 +406,7 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
         if (targetInfos.empty())
         {
             EOTargetInfo emptyTarget;
-            
+
             // 填充时间信息（精确到毫秒）
             struct timeval tv;
             gettimeofday(&tv, NULL);
@@ -388,7 +424,7 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
             emptyTarget.dev_id = 0;
             emptyTarget.guid_id = 0;
             emptyTarget.tar_id = 0;
-            emptyTarget.trk_stat = 0;      // 设为0表示目标丢失
+            emptyTarget.trk_stat = 0; // 设为0表示目标丢失
             emptyTarget.trk_mod = 0;
 
             // 填充位置信息为0
@@ -416,31 +452,35 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
             targetInfos.push_back(emptyTarget);
         }
 
-        // 打包并发送目标信息（无论是否有检测到的目标）
-        static uint16_t sendCount = 0;
-        sendCount++;
-        std::vector<uint8_t> message =
-            EOProtocolParser::PackEOTargetMessage(targetInfos, sendCount);
-
-        // 发送打包后的报文
-        if (!message.empty())
+        // 只在满足帧率条件时打包并发送目标信息
+        if (should_send)
         {
-            ssize_t sent =
-                sendto(self->sockfd, message.data(), message.size(), 0,
-                       (struct sockaddr *)&self->multicast_addr,
-                       sizeof(self->multicast_addr));
-            if (sent < 0)
+            static uint16_t sendCount = 0;
+            sendCount++;
+            std::vector<uint8_t> message =
+                EOProtocolParser::PackEOTargetMessage(targetInfos, sendCount);
+
+            // 发送打包后的报文
+            if (!message.empty())
             {
-                GST_WARNING("Failed to send EO target message with %zu targets: %s",
-                            targetInfos.size(), strerror(errno));
-            }
-            else
-            {
-                GST_DEBUG("Successfully sent EO target message with %zu targets, size: %zu bytes",
-                          targetInfos.size(), message.size());
+                ssize_t sent = sendto(self->sockfd, message.data(), message.size(),
+                                      0, (struct sockaddr *)&self->multicast_addr,
+                                      sizeof(self->multicast_addr));
+                if (sent < 0)
+                {
+                    GST_WARNING(
+                        "Failed to send EO target message with %zu targets: %s",
+                        targetInfos.size(), strerror(errno));
+                }
+                else
+                {
+                    GST_DEBUG("Successfully sent EO target message with %zu "
+                              "targets, size: %zu bytes (fps: %u)",
+                              targetInfos.size(), message.size(), self->fps);
+                }
             }
         }
-        
+
         // 清空目标列表，为下一帧准备
         targetInfos.clear();
 
@@ -477,64 +517,68 @@ error:
 static gboolean gst_udpmulticast_sink_start(GstBaseSink *sink)
 {
     g_print("gst_udpmulticast_sink_start\n");
-    Gstudpmulticast_sink            *self = GST_UDPMULTICAST_SINK(sink);
+    Gstudpmulticast_sink    *self = GST_UDPMULTICAST_SINK(sink);
     NvBufSurfaceCreateParams create_params = {0};
 
     CHECK_CUDA_STATUS(cudaSetDevice(self->gpu_id), "Unable to set cuda device");
-    
+
     // 如果指定了网卡名称，绑定到该网卡
     if (self->iface && strlen(self->iface) > 0)
     {
         struct ifreq ifr;
         memset(&ifr, 0, sizeof(ifr));
         strncpy(ifr.ifr_name, self->iface, IFNAMSIZ - 1);
-        
+
         // 获取网卡索引
         if (ioctl(self->sockfd, SIOCGIFINDEX, &ifr) < 0)
         {
-            GST_ERROR("Failed to get interface %s index: %s", self->iface, strerror(errno));
+            GST_ERROR("Failed to get interface %s index: %s", self->iface,
+                      strerror(errno));
             goto error;
         }
-        
+
         // 绑定到指定网卡
-        if (setsockopt(self->sockfd, SOL_SOCKET, SO_BINDTODEVICE, 
-                      self->iface, strlen(self->iface)) < 0)
+        if (setsockopt(self->sockfd, SOL_SOCKET, SO_BINDTODEVICE, self->iface,
+                       strlen(self->iface)) < 0)
         {
-            GST_WARNING("Failed to bind to interface %s: %s. Trying to continue...", 
-                       self->iface, strerror(errno));
+            GST_WARNING(
+                "Failed to bind to interface %s: %s. Trying to continue...",
+                self->iface, strerror(errno));
         }
         else
         {
             GST_INFO("Successfully bound to interface %s", self->iface);
         }
-        
+
         // 设置组播发送接口
         struct in_addr local_interface;
         memset(&local_interface, 0, sizeof(local_interface));
-        
+
         // 获取网卡IP地址
         if (ioctl(self->sockfd, SIOCGIFADDR, &ifr) < 0)
         {
-            GST_WARNING("Failed to get interface %s address: %s", self->iface, strerror(errno));
+            GST_WARNING("Failed to get interface %s address: %s", self->iface,
+                        strerror(errno));
         }
         else
         {
             local_interface = ((struct sockaddr_in *)&ifr.ifr_addr)->sin_addr;
-            
+
             // 设置组播发送接口
-            if (setsockopt(self->sockfd, IPPROTO_IP, IP_MULTICAST_IF, 
-                          &local_interface, sizeof(local_interface)) < 0)
+            if (setsockopt(self->sockfd, IPPROTO_IP, IP_MULTICAST_IF,
+                           &local_interface, sizeof(local_interface)) < 0)
             {
-                GST_WARNING("Failed to set multicast interface: %s", strerror(errno));
+                GST_WARNING("Failed to set multicast interface: %s",
+                            strerror(errno));
             }
             else
             {
-                GST_INFO("Set multicast interface to %s (IP: %s)", 
-                        self->iface, inet_ntoa(local_interface));
+                GST_INFO("Set multicast interface to %s (IP: %s)", self->iface,
+                         inet_ntoa(local_interface));
             }
         }
     }
-    
+
     return TRUE;
 error:
     return FALSE;
@@ -567,9 +611,9 @@ error:
 }
 
 static void gst_udpmulticast_sink_set_property(GObject      *object,
-                                       guint         property_id,
-                                       const GValue *value,
-                                       GParamSpec   *pspec)
+                                               guint         property_id,
+                                               const GValue *value,
+                                               GParamSpec   *pspec)
 {
     Gstudpmulticast_sink *self = GST_UDPMULTICAST_SINK(object);
     switch (property_id)
@@ -591,15 +635,19 @@ static void gst_udpmulticast_sink_set_property(GObject      *object,
         g_free(self->iface);
         self->iface = g_value_dup_string(value);
         break;
+    case PROP_FPS:
+        self->fps = g_value_get_uint(value);
+        GST_INFO("Set report FPS to: %u", self->fps);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
     }
 }
 
 static void gst_udpmulticast_sink_get_property(GObject    *object,
-                                       guint       property_id,
-                                       GValue     *value,
-                                       GParamSpec *pspec)
+                                               guint       property_id,
+                                               GValue     *value,
+                                               GParamSpec *pspec)
 {
     Gstudpmulticast_sink *self = GST_UDPMULTICAST_SINK(object);
     switch (property_id)
@@ -615,6 +663,9 @@ static void gst_udpmulticast_sink_get_property(GObject    *object,
         break;
     case PROP_IFACE:
         g_value_set_string(value, self->iface);
+        break;
+    case PROP_FPS:
+        g_value_set_uint(value, self->fps);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
@@ -663,7 +714,8 @@ static gboolean _udpmulticast_sink_init(GstPlugin *plugin)
 
 /* gstreamer looks for this structure to register _udpmulticast_sinks
  *
- * exchange the string 'Template udpmulticast_sink' with your _udpmulticast_sink description
+ * exchange the string 'Template udpmulticast_sink' with your _udpmulticast_sink
+ * description
  */
 GST_PLUGIN_DEFINE(GST_VERSION_MAJOR,
                   GST_VERSION_MINOR,
