@@ -11,7 +11,7 @@
             "program": "${workspaceFolder}/../../build/deepstream-app",
             "args": [
                 "-c",
-                "${workspaceFolder}/../deepstream-app/configs/rgb_app_config.txt"
+                "${workspaceFolder}/../deepstream-app/configs/debug_rgb_app_config.txt"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

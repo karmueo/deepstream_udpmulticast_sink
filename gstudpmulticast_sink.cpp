@@ -156,6 +156,11 @@ static void gst_udpmulticast_sink_class_init(Gstudpmulticast_sinkClass *klass)
             "iface", "Network Interface",
             "Network interface name for multicast (e.g., eth0, enp5s0)", NULL,
             (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(
+        gobject_class, PROP_FPS,
+        g_param_spec_uint(
+            "fps", "Report FPS", "Frame rate for sending target reports", 1, 120,
+            25, (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
     _detctAnalysis.minPixel = 9999;
 }
