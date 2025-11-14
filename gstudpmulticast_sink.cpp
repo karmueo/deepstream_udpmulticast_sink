@@ -366,36 +366,83 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink, GstBuffer *
             }
         }
 
-        // 如果有检测到的目标，打包并发送所有目标信息
-        if (!targetInfos.empty())
+        // 如果没有检测到目标，创建一个空目标信息，trk_stat设为0（丢失）
+        if (targetInfos.empty())
         {
-            static uint16_t sendCount = 0;
-            sendCount++;
-            std::vector<uint8_t> message =
-                EOProtocolParser::PackEOTargetMessage(targetInfos, sendCount);
-
-            // 发送打包后的报文
-            if (!message.empty())
-            {
-                ssize_t sent =
-                    sendto(self->sockfd, message.data(), message.size(), 0,
-                           (struct sockaddr *)&self->multicast_addr,
-                           sizeof(self->multicast_addr));
-                if (sent < 0)
-                {
-                    GST_WARNING("Failed to send EO target message with %zu targets: %s",
-                                targetInfos.size(), strerror(errno));
-                }
-                else
-                {
-                    GST_DEBUG("Successfully sent EO target message with %zu targets, size: %zu bytes",
-                              targetInfos.size(), message.size());
-                }
-            }
+            EOTargetInfo emptyTarget;
             
-            // 清空目标列表，为下一帧准备
-            targetInfos.clear();
+            // 填充时间信息（精确到毫秒）
+            struct timeval tv;
+            gettimeofday(&tv, NULL);
+            struct tm tm_info;
+            localtime_r(&tv.tv_sec, &tm_info);
+            emptyTarget.yr = tm_info.tm_year + 1900;
+            emptyTarget.mo = tm_info.tm_mon + 1;
+            emptyTarget.dy = tm_info.tm_mday;
+            emptyTarget.h = tm_info.tm_hour;
+            emptyTarget.min = tm_info.tm_min;
+            emptyTarget.sec = tm_info.tm_sec;
+            emptyTarget.msec = tv.tv_usec / 1000.0f; // 毫秒
+
+            // 填充设备和目标信息
+            emptyTarget.dev_id = 0;
+            emptyTarget.guid_id = 0;
+            emptyTarget.tar_id = 0;
+            emptyTarget.trk_stat = 0;      // 设为0表示目标丢失
+            emptyTarget.trk_mod = 0;
+
+            // 填充位置信息为0
+            emptyTarget.fov_angle = 0.0;
+            emptyTarget.lon = 0.0;
+            emptyTarget.lat = 0.0;
+            emptyTarget.alt = 0.0;
+            emptyTarget.tar_a = 0.0;
+            emptyTarget.tar_e = 0.0;
+            emptyTarget.tar_rng = 0.0;
+            emptyTarget.tar_av = 0.0;
+            emptyTarget.tar_ev = 0.0;
+            emptyTarget.tar_rv = 0.0;
+            emptyTarget.fov_h = 0.0;
+            emptyTarget.fov_v = 0.0;
+
+            // 填充目标检测信息
+            emptyTarget.offset_h = 0;
+            emptyTarget.offset_v = 0;
+            emptyTarget.tar_rect = 0;
+            emptyTarget.tar_category = static_cast<int>(TargetClass::UNKNOWN);
+            emptyTarget.tar_iden = "none";
+            emptyTarget.tar_cfid = 0.0f;
+
+            targetInfos.push_back(emptyTarget);
         }
+
+        // 打包并发送目标信息（无论是否有检测到的目标）
+        static uint16_t sendCount = 0;
+        sendCount++;
+        std::vector<uint8_t> message =
+            EOProtocolParser::PackEOTargetMessage(targetInfos, sendCount);
+
+        // 发送打包后的报文
+        if (!message.empty())
+        {
+            ssize_t sent =
+                sendto(self->sockfd, message.data(), message.size(), 0,
+                       (struct sockaddr *)&self->multicast_addr,
+                       sizeof(self->multicast_addr));
+            if (sent < 0)
+            {
+                GST_WARNING("Failed to send EO target message with %zu targets: %s",
+                            targetInfos.size(), strerror(errno));
+            }
+            else
+            {
+                GST_DEBUG("Successfully sent EO target message with %zu targets, size: %zu bytes",
+                          targetInfos.size(), message.size());
+            }
+        }
+        
+        // 清空目标列表，为下一帧准备
+        targetInfos.clear();
 
         // 把_detctAnalysis写入日志
         // 为了更方便定位，添加标志
