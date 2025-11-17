@@ -10,8 +10,8 @@ static std::atomic<bool> g_stop{false};
 static void handleSig(int){ g_stop = true; }
 
 int main(int argc, char** argv) {
-    std::string ip = "239.255.10.10";
-    uint16_t port = 6000;
+    std::string ip = "230.1.8.31";
+    uint16_t port = 8128;
     std::string bind_if = "";  // 绑定网卡名，如果不指定则使用默认网卡
     
     if (argc > 1) ip = argv[1];
