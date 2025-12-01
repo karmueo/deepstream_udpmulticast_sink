@@ -300,6 +300,11 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
 
                 // 处理二次分类，取第一个 classifier 的第一个 label
                 // 作为输出（若存在）
+                // 同时检查是否有分类信息用于后续目标映射
+                guint16 final_class_id = obj_meta->class_id;
+                float final_confidence = obj_meta->confidence;
+                gboolean has_classifier = FALSE;
+                
                 for (NvDsMetaList *l_class = obj_meta->classifier_meta_list;
                      l_class != NULL; l_class = l_class->next)
                 {
@@ -318,6 +323,14 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                             _detctAnalysis.secondaryClassCountMap.insert(
                                 std::pair<guint16, guint>(
                                     label->result_class_id, 1));
+                        
+                        // 如果是第一次遇到分类信息，保存用于目标映射
+                        if (!has_classifier)
+                        {
+                            final_class_id = label->result_class_id;
+                            final_confidence = label->result_prob;
+                            has_classifier = TRUE;
+                        }
                     }
                 }
 
@@ -378,8 +391,8 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                     (int)(obj_meta->rect_params.left +
                           obj_meta->rect_params.width / 2); // 目标中心的像素值
 
-                // 映射目标类型 - 继续保持TargetClass
-                switch (obj_meta->class_id)
+                // 映射目标类型 - 优先使用分类信息，否则使用检测信息
+                switch (final_class_id)
                 {
                 case 0:
                     targetInfo.tar_category =
@@ -398,7 +411,7 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                     break;
                 }
 
-                targetInfo.tar_cfid = obj_meta->confidence;
+                targetInfo.tar_cfid = final_confidence;
                 // 当目标置信度小于0时，trk_stat置2（外推）；其他情况为1（正常）
                 targetInfo.trk_stat = (targetInfo.tar_cfid < 0.0f) ? 2 : 1;
 
