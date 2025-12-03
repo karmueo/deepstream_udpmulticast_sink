@@ -404,6 +404,11 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                         static_cast<int>(TargetClass::UAV);
                     targetInfo.tar_iden = "uav";
                     break;
+                case 2:
+                    targetInfo.tar_category =
+                        static_cast<int>(TargetClass::UAV);
+                    targetInfo.tar_iden = "uav";
+                    break;
                 default:
                     targetInfo.tar_category =
                         static_cast<int>(TargetClass::UNKNOWN);
