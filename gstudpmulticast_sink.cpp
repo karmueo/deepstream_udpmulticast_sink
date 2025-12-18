@@ -36,6 +36,7 @@
 #include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/time.h>
+#include <fcntl.h>
 
 /* enable to write transformed cvmat to files */
 /* #define DSEXAMPLE_DEBUG */
@@ -193,6 +194,18 @@ static void gst_udpmulticast_sink_init(Gstudpmulticast_sink *self)
         return;
     }
 
+    // 设置为非阻塞，防止网络异常时阻塞流线程导致上游误判为断流
+    int flags = fcntl(self->sockfd, F_GETFL, 0);
+    if (flags != -1)
+    {
+        if (fcntl(self->sockfd, F_SETFL, flags | O_NONBLOCK) == -1)
+            GST_WARNING("Failed to set multicast socket non-blocking: %s", strerror(errno));
+    }
+    else
+    {
+        GST_WARNING("Failed to query multicast socket flags: %s", strerror(errno));
+    }
+
     // 设置组播地址
     memset(&self->multicast_addr, 0, sizeof(self->multicast_addr));
     self->multicast_addr.sin_family = AF_INET;
@@ -240,6 +253,11 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
     surface = (NvBufSurface *)in_map_info.data;
 
     batch_meta = gst_buffer_get_nvds_batch_meta(buf);
+    if (!batch_meta)
+    {
+        GST_WARNING_OBJECT(self, "No batch meta on buffer, dropping payload");
+        goto error;
+    }
     // 记录每一帧的信息
     // 帧号
     // 目标大类和配置文件中的大类如果一致则+1
@@ -487,13 +505,21 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
             if (!message.empty())
             {
                 ssize_t sent = sendto(self->sockfd, message.data(), message.size(),
-                                      0, (struct sockaddr *)&self->multicast_addr,
+                                      MSG_DONTWAIT,
+                                      (struct sockaddr *)&self->multicast_addr,
                                       sizeof(self->multicast_addr));
                 if (sent < 0)
                 {
-                    GST_WARNING(
-                        "Failed to send EO target message with %zu targets: %s",
-                        targetInfos.size(), strerror(errno));
+                    if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    {
+                        GST_WARNING_OBJECT(self, "Multicast socket busy, dropping frame");
+                    }
+                    else
+                    {
+                        GST_WARNING(
+                            "Failed to send EO target message with %zu targets: %s",
+                            targetInfos.size(), strerror(errno));
+                    }
                 }
                 else
                 {
