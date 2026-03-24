@@ -44,7 +44,10 @@ struct _Gstudpmulticast_sink
     guint  port; // multicast port
     gchar *iface; // multicast network interface name
     guint  fps;  // report rate in frames per second (default: 25)
-    gdouble last_send_time; // timestamp of last sent message (in seconds)
+#ifdef __cplusplus
+    std::map<guint, gdouble> last_send_time_by_source; // per-source send timestamp
+#endif
+    guint16 send_count; // packet counter
 };
 
 struct _Gstudpmulticast_sinkClass

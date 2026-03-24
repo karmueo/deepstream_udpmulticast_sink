@@ -38,6 +38,7 @@ int main() {
     target1.offset_h = 0;
     target1.offset_v = 0;
     target1.tar_rect = 1024;
+    target1.source_id = 3;
     targetInfos.push_back(target1);
     
     // 目标2
@@ -81,6 +82,7 @@ int main() {
             std::cout << "  tar_iden: " << parsedTargets[i].tar_iden << std::endl;
             std::cout << "  tar_cfid: " << parsedTargets[i].tar_cfid << std::endl;
             std::cout << "  tar_rect: " << parsedTargets[i].tar_rect << std::endl;
+            std::cout << "  source_id: " << parsedTargets[i].source_id << std::endl;
         }
     } else {
         std::cerr << "Failed to parse message!" << std::endl;

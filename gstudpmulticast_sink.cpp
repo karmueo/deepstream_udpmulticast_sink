@@ -42,8 +42,7 @@
 /* #define DSEXAMPLE_DEBUG */
 /* 启用将转换后的 cvmat 写入文件 */
 /* #define DSEXAMPLE_DEBUG */
-static GQuark         _dsmeta_quark = 0;
-static DetectAnalysis _detctAnalysis = {0};
+static GQuark _dsmeta_quark = 0;
 
 GST_DEBUG_CATEGORY_STATIC(gst_udpmulticast_sink_debug);
 #define GST_CAT_DEFAULT gst_udpmulticast_sink_debug
@@ -104,6 +103,107 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
 static gboolean      gst_udpmulticast_sink_start(GstBaseSink *sink);
 static gboolean      gst_udpmulticast_sink_stop(GstBaseSink *sink);
 
+static gdouble
+get_current_time_seconds(void)
+{
+    struct timeval tv_now;
+    gettimeofday(&tv_now, NULL);
+    return tv_now.tv_sec + tv_now.tv_usec / 1000000.0;
+}
+
+static gboolean
+should_send_for_source(Gstudpmulticast_sink *self, guint source_id,
+                       gdouble current_time)
+{
+    gdouble send_interval = (self->fps > 0) ? (1.0 / self->fps) : 0.04;
+    auto    last_it = self->last_send_time_by_source.find(source_id);
+
+    if (last_it == self->last_send_time_by_source.end() ||
+        current_time - last_it->second >= send_interval)
+    {
+        self->last_send_time_by_source[source_id] = current_time;
+        return TRUE;
+    }
+
+    return FALSE;
+}
+
+static void
+fill_target_timestamp(EOTargetInfo *target_info)
+{
+    struct timeval tv;
+    struct tm      tm_info;
+
+    gettimeofday(&tv, NULL);
+    localtime_r(&tv.tv_sec, &tm_info);
+
+    target_info->yr = tm_info.tm_year + 1900;
+    target_info->mo = tm_info.tm_mon + 1;
+    target_info->dy = tm_info.tm_mday;
+    target_info->h = tm_info.tm_hour;
+    target_info->min = tm_info.tm_min;
+    target_info->sec = tm_info.tm_sec;
+    target_info->msec = tv.tv_usec / 1000.0f;
+}
+
+static EOTargetInfo
+create_empty_target(guint source_id)
+{
+    EOTargetInfo empty_target = {};
+
+    fill_target_timestamp(&empty_target);
+
+    empty_target.dev_id = 0;
+    empty_target.guid_id = 0;
+    empty_target.tar_id = 0;
+    empty_target.trk_stat = 0;
+    empty_target.trk_mod = 0;
+    empty_target.fov_angle = 0.0;
+    empty_target.lon = 0.0;
+    empty_target.lat = 0.0;
+    empty_target.alt = 0.0;
+    empty_target.tar_a = 0.0;
+    empty_target.tar_e = 0.0;
+    empty_target.tar_rng = 0.0;
+    empty_target.tar_av = 0.0;
+    empty_target.tar_ev = 0.0;
+    empty_target.tar_rv = 0.0;
+    empty_target.fov_h = 0.0;
+    empty_target.fov_v = 0.0;
+    empty_target.offset_h = 0;
+    empty_target.offset_v = 0;
+    empty_target.tar_rect = 0;
+    empty_target.tar_category = static_cast<int>(TargetClass::UNKNOWN);
+    empty_target.tar_iden = "none";
+    empty_target.tar_cfid = 0.0f;
+    empty_target.source_id = source_id;
+
+    return empty_target;
+}
+
+static void
+log_detect_analysis(guint source_id, const DetectAnalysis &detect_analysis)
+{
+    GST_INFO("<===================================");
+    GST_INFO("source_id: %u", source_id);
+    GST_INFO("frameNum: %lu", detect_analysis.frameNum);
+    for (std::map<guint16, guint>::const_iterator it =
+             detect_analysis.primaryClassCountMap.begin();
+         it != detect_analysis.primaryClassCountMap.end(); ++it)
+    {
+        GST_INFO("primaryClassCountMap: %d, %d", it->first, it->second);
+    }
+    for (std::map<guint16, guint>::const_iterator it =
+             detect_analysis.secondaryClassCountMap.begin();
+         it != detect_analysis.secondaryClassCountMap.end(); ++it)
+    {
+        GST_INFO("secondaryClassCountMap: %d, %d", it->first, it->second);
+    }
+    GST_INFO("minPixel: %d", detect_analysis.minPixel);
+    GST_INFO("meanPixel: %d", detect_analysis.meanPixel);
+    GST_INFO("===================================>");
+}
+
 /* GObject vmethod implementations */
 
 /* initialize the _udpmulticast_sink's class */
@@ -163,7 +263,6 @@ static void gst_udpmulticast_sink_class_init(Gstudpmulticast_sinkClass *klass)
             "fps", "Report FPS", "Frame rate for sending target reports", 1, 120,
             25, (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
-    _detctAnalysis.minPixel = 9999;
 }
 
 /* initialize the new element
@@ -184,7 +283,7 @@ static void gst_udpmulticast_sink_init(Gstudpmulticast_sink *self)
     self->port = 5000;
     self->iface = NULL;
     self->fps = 25;
-    self->last_send_time = 0.0;
+    self->send_count = 0;
 
     // 创建UDP Socket
     self->sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -233,15 +332,10 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                                                   GstBuffer   *buf)
 {
     Gstudpmulticast_sink *self = GST_UDPMULTICAST_SINK(sink);
-
-    NvDsBatchMeta            *batch_meta = NULL;
-    NvDsMetaList             *l_frame = NULL;
-    NvDsFrameMeta            *frame_meta = NULL;
-    NvDsMetaList             *l_obj = NULL;
-    NvDsObjectMeta           *obj_meta = NULL;
-    NvBufSurface             *surface = NULL;
-    GstMapInfo                in_map_info;
-    std::vector<EOTargetInfo> targetInfos;
+    NvDsBatchMeta        *batch_meta = NULL;
+    NvDsMetaList         *l_frame = NULL;
+    GstMapInfo            in_map_info;
+    gboolean              mapped = FALSE;
 
     memset(&in_map_info, 0, sizeof(in_map_info));
     if (!gst_buffer_map(buf, &in_map_info, GST_MAP_READ))
@@ -249,8 +343,9 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
         g_print("Error: Failed to map gst buffer\n");
         goto error;
     }
+    mapped = TRUE;
+
     nvds_set_input_system_timestamp(buf, GST_ELEMENT_NAME(self));
-    surface = (NvBufSurface *)in_map_info.data;
 
     batch_meta = gst_buffer_get_nvds_batch_meta(buf);
     if (!batch_meta)
@@ -258,71 +353,47 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
         GST_WARNING_OBJECT(self, "No batch meta on buffer, dropping payload");
         goto error;
     }
-    // 记录每一帧的信息
-    // 帧号
-    // 目标大类和配置文件中的大类如果一致则+1
-    // 目标小类和配置文件中的小类如果一致则+1
-    // 目标最小像素数
-    // 目标平均像素数
     for (l_frame = batch_meta->frame_meta_list; l_frame != NULL;
          l_frame = l_frame->next)
     {
-        frame_meta = (NvDsFrameMeta *)(l_frame->data);
-        _detctAnalysis.frameNum = frame_meta->frame_num + 1;
-        
-        // 基于时间的帧率控制：不依赖输入帧率
-        struct timeval tv_now;
-        gettimeofday(&tv_now, NULL);
-        gdouble current_time = tv_now.tv_sec + tv_now.tv_usec / 1000000.0;
-        
-        // 计算距离上次发送的时间间隔
-        gdouble time_since_last_send = current_time - self->last_send_time;
-        gdouble send_interval = (self->fps > 0) ? (1.0 / self->fps) : 0.04; // 默认25fps = 0.04秒
-        
-        // 判断是否应该发送（时间间隔大于等于发送间隔）
-        gboolean should_send = (self->last_send_time == 0.0 || time_since_last_send >= send_interval);
-        
-        if (should_send) {
-            self->last_send_time = current_time;
-        }
-        
-        // 获取源分辨率
-        guint source_width = frame_meta->source_frame_width;
-        guint source_height = frame_meta->source_frame_height;
-        // 计算视频中心点坐标
-        float center_x = (float)source_width / 2.0f;
-        float center_y = (float)source_height / 2.0f;
+        NvDsFrameMeta            *frame_meta = (NvDsFrameMeta *)(l_frame->data);
+        NvDsMetaList             *l_obj = NULL;
+        std::vector<EOTargetInfo> target_infos;
+        DetectAnalysis            detect_analysis = {};
+        guint                     source_id = frame_meta->source_id;
+        guint                     total_object_count = 0;
+        guint64                   total_pixel_sum = 0;
+        gdouble                   current_time = get_current_time_seconds();
+        gboolean                  should_send =
+            should_send_for_source(self, source_id, current_time);
+
+        detect_analysis.frameNum = frame_meta->frame_num + 1;
+        detect_analysis.minPixel = G_MAXUINT16;
 
         for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
              l_obj = l_obj->next)
         {
-            obj_meta = (NvDsObjectMeta *)(l_obj->data);
+            NvDsObjectMeta *obj_meta = (NvDsObjectMeta *)(l_obj->data);
+
             if ((obj_meta->class_id >= 0))
             {
-                // 为每个检测目标构造并发送EOTargetInfo
-                // 统计检测识别
                 std::map<guint16, guint>::iterator it =
-                    _detctAnalysis.primaryClassCountMap.find(
+                    detect_analysis.primaryClassCountMap.find(
                         obj_meta->class_id);
-                if (it != _detctAnalysis.primaryClassCountMap.end())
+                if (it != detect_analysis.primaryClassCountMap.end())
                 {
-                    // 如果找到了，就+1
                     it->second++;
                 }
                 else
                 {
-                    // 如果没找到，就插入一个新的
-                    _detctAnalysis.primaryClassCountMap.insert(
+                    detect_analysis.primaryClassCountMap.insert(
                         std::pair<guint16, guint>(obj_meta->class_id, 1));
                 }
 
-                // 处理二次分类，取第一个 classifier 的第一个 label
-                // 作为输出（若存在）
-                // 同时检查是否有分类信息用于后续目标映射
                 guint16 final_class_id = obj_meta->class_id;
-                float final_confidence = obj_meta->confidence;
+                float   final_confidence = obj_meta->confidence;
                 gboolean has_classifier = FALSE;
-                
+
                 for (NvDsMetaList *l_class = obj_meta->classifier_meta_list;
                      l_class != NULL; l_class = l_class->next)
                 {
@@ -332,17 +403,15 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                          l_label != NULL; l_label = l_label->next)
                     {
                         NvDsLabelInfo *label = (NvDsLabelInfo *)l_label->data;
-                        // 统计计数
-                        auto it2 = _detctAnalysis.secondaryClassCountMap.find(
+                        auto it2 = detect_analysis.secondaryClassCountMap.find(
                             label->result_class_id);
-                        if (it2 != _detctAnalysis.secondaryClassCountMap.end())
+                        if (it2 != detect_analysis.secondaryClassCountMap.end())
                             it2->second++;
                         else
-                            _detctAnalysis.secondaryClassCountMap.insert(
+                            detect_analysis.secondaryClassCountMap.insert(
                                 std::pair<guint16, guint>(
                                     label->result_class_id, 1));
-                        
-                        // 如果是第一次遇到分类信息，保存用于目标映射
+
                         if (!has_classifier)
                         {
                             final_class_id = label->result_class_id;
@@ -352,43 +421,24 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                     }
                 }
 
-                // 记录最像素数和平均像素数
-                guint16 pixel =
-                    obj_meta->rect_params.width * obj_meta->rect_params.height;
-                if (pixel < _detctAnalysis.minPixel)
+                guint32 pixel = (guint32)(obj_meta->rect_params.width *
+                                          obj_meta->rect_params.height);
+                if (pixel < detect_analysis.minPixel)
                 {
-                    _detctAnalysis.minPixel = pixel;
+                    detect_analysis.minPixel =
+                        (guint16)MIN(pixel, (guint32)G_MAXUINT16);
                 }
-                guint totalObjNum = _detctAnalysis.primaryClassCountMap.size();
-                _detctAnalysis.meanPixel =
-                    (_detctAnalysis.meanPixel * (totalObjNum - 1) + pixel) /
-                    totalObjNum;
+                total_pixel_sum += pixel;
+                total_object_count++;
 
-                // 为当前目标创建EOTargetInfo并添加到向量中
-                EOTargetInfo targetInfo;
-                // 不使用 memset，因为 EOTargetInfo 包含 std::string
-
-                // 填充时间信息（精确到毫秒）
-                struct timeval tv;
-                gettimeofday(&tv, NULL);
-                struct tm tm_info;
-                localtime_r(&tv.tv_sec, &tm_info);
-                targetInfo.yr = tm_info.tm_year + 1900;
-                targetInfo.mo = tm_info.tm_mon + 1;
-                targetInfo.dy = tm_info.tm_mday;
-                targetInfo.h = tm_info.tm_hour;
-                targetInfo.min = tm_info.tm_min;
-                targetInfo.sec = tm_info.tm_sec;
-                targetInfo.msec = tv.tv_usec / 1000.0f; // 毫秒
-
-                // 填充设备和目标信息 - 按照要求设置固定值
+                EOTargetInfo targetInfo = {};
+                fill_target_timestamp(&targetInfo);
                 targetInfo.dev_id = 0;   // 固定为0（可见光）
                 targetInfo.guid_id = 0;  // 固定为0
                 targetInfo.tar_id = 0;   // 固定为0
                 targetInfo.trk_stat = 1; // 默认正常，后续根据置信度调整
                 targetInfo.trk_mod = 0;  // 固定为0（检测跟踪）
 
-                // 填充位置信息 - 按照要求设置为0
                 targetInfo.fov_angle = 0.0;
                 targetInfo.lon = 0.0;
                 targetInfo.lat = 0.0;
@@ -402,14 +452,13 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                 targetInfo.fov_h = 0.0;
                 targetInfo.fov_v = 0.0;
 
-                // 填充目标检测信息
                 targetInfo.offset_h = 0; // 固定为0
                 targetInfo.offset_v = 0; // 固定为0
                 targetInfo.tar_rect =
                     (int)(obj_meta->rect_params.left +
                           obj_meta->rect_params.width / 2); // 目标中心的像素值
+                targetInfo.source_id = source_id;
 
-                // 映射目标类型 - 优先使用分类信息，否则使用检测信息
                 switch (final_class_id)
                 {
                 case 0:
@@ -435,73 +484,34 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                 }
 
                 targetInfo.tar_cfid = final_confidence;
-                // 当目标置信度小于0时，trk_stat置2（外推）；其他情况为1（正常）
                 targetInfo.trk_stat = (targetInfo.tar_cfid < 0.0f) ? 2 : 1;
-
-                // 添加到目标列表
-                targetInfos.push_back(targetInfo);
+                target_infos.push_back(targetInfo);
             }
         }
 
-        // 如果没有检测到目标，创建一个空目标信息，trk_stat设为0（丢失）
-        if (targetInfos.empty())
+        if (total_object_count > 0)
         {
-            EOTargetInfo emptyTarget;
-
-            // 填充时间信息（精确到毫秒）
-            struct timeval tv;
-            gettimeofday(&tv, NULL);
-            struct tm tm_info;
-            localtime_r(&tv.tv_sec, &tm_info);
-            emptyTarget.yr = tm_info.tm_year + 1900;
-            emptyTarget.mo = tm_info.tm_mon + 1;
-            emptyTarget.dy = tm_info.tm_mday;
-            emptyTarget.h = tm_info.tm_hour;
-            emptyTarget.min = tm_info.tm_min;
-            emptyTarget.sec = tm_info.tm_sec;
-            emptyTarget.msec = tv.tv_usec / 1000.0f; // 毫秒
-
-            // 填充设备和目标信息
-            emptyTarget.dev_id = 0;
-            emptyTarget.guid_id = 0;
-            emptyTarget.tar_id = 0;
-            emptyTarget.trk_stat = 0; // 设为0表示目标丢失
-            emptyTarget.trk_mod = 0;
-
-            // 填充位置信息为0
-            emptyTarget.fov_angle = 0.0;
-            emptyTarget.lon = 0.0;
-            emptyTarget.lat = 0.0;
-            emptyTarget.alt = 0.0;
-            emptyTarget.tar_a = 0.0;
-            emptyTarget.tar_e = 0.0;
-            emptyTarget.tar_rng = 0.0;
-            emptyTarget.tar_av = 0.0;
-            emptyTarget.tar_ev = 0.0;
-            emptyTarget.tar_rv = 0.0;
-            emptyTarget.fov_h = 0.0;
-            emptyTarget.fov_v = 0.0;
-
-            // 填充目标检测信息
-            emptyTarget.offset_h = 0;
-            emptyTarget.offset_v = 0;
-            emptyTarget.tar_rect = 0;
-            emptyTarget.tar_category = static_cast<int>(TargetClass::UNKNOWN);
-            emptyTarget.tar_iden = "none";
-            emptyTarget.tar_cfid = 0.0f;
-
-            targetInfos.push_back(emptyTarget);
+            detect_analysis.meanPixel =
+                (guint16)MIN(total_pixel_sum / total_object_count,
+                             (guint64)G_MAXUINT16);
+        }
+        else
+        {
+            detect_analysis.minPixel = 0;
+            detect_analysis.meanPixel = 0;
         }
 
-        // 只在满足帧率条件时打包并发送目标信息
+        if (target_infos.empty())
+        {
+            target_infos.push_back(create_empty_target(source_id));
+        }
+
         if (should_send)
         {
-            static uint16_t sendCount = 0;
-            sendCount++;
             std::vector<uint8_t> message =
-                EOProtocolParser::PackEOTargetMessage(targetInfos, sendCount);
+                EOProtocolParser::PackEOTargetMessage(target_infos,
+                                                      ++self->send_count);
 
-            // 发送打包后的报文
             if (!message.empty())
             {
                 ssize_t sent = sendto(self->sockfd, message.data(), message.size(),
@@ -517,46 +527,28 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                     else
                     {
                         GST_WARNING(
-                            "Failed to send EO target message with %zu targets: %s",
-                            targetInfos.size(), strerror(errno));
+                            "Failed to send EO target message for source_id=%u with %zu targets: %s",
+                            source_id, target_infos.size(), strerror(errno));
                     }
                 }
                 else
                 {
-                    GST_DEBUG("Successfully sent EO target message with %zu "
-                              "targets, size: %zu bytes (fps: %u)",
-                              targetInfos.size(), message.size(), self->fps);
+                    GST_DEBUG("Successfully sent EO target message for source_id=%u "
+                              "with %zu targets, size: %zu bytes (fps: %u)",
+                              source_id, target_infos.size(), message.size(),
+                              self->fps);
                 }
             }
         }
 
-        // 清空目标列表，为下一帧准备
-        targetInfos.clear();
-
-        // 把_detctAnalysis写入日志
-        // 为了更方便定位，添加标志
-        GST_INFO("<===================================");
-        GST_INFO("frameNum: %lu", _detctAnalysis.frameNum);
-        for (std::map<guint16, guint>::iterator it =
-                 _detctAnalysis.primaryClassCountMap.begin();
-             it != _detctAnalysis.primaryClassCountMap.end(); it++)
-        {
-            GST_INFO("primaryClassCountMap: %d, %d", it->first, it->second);
-        }
-        for (std::map<guint16, guint>::iterator it =
-                 _detctAnalysis.secondaryClassCountMap.begin();
-             it != _detctAnalysis.secondaryClassCountMap.end(); it++)
-        {
-            GST_INFO("secondaryClassCountMap: %d, %d", it->first, it->second);
-        }
-        GST_INFO("minPixel: %d", _detctAnalysis.minPixel);
-        GST_INFO("meanPixel: %d", _detctAnalysis.meanPixel);
-        GST_INFO("===================================>");
+        log_detect_analysis(source_id, detect_analysis);
     }
+
 error:
 
     nvds_set_output_system_timestamp(buf, GST_ELEMENT_NAME(self));
-    gst_buffer_unmap(buf, &in_map_info);
+    if (mapped)
+        gst_buffer_unmap(buf, &in_map_info);
     return GST_FLOW_OK;
 }
 
@@ -566,8 +558,10 @@ error:
 static gboolean gst_udpmulticast_sink_start(GstBaseSink *sink)
 {
     g_print("gst_udpmulticast_sink_start\n");
-    Gstudpmulticast_sink    *self = GST_UDPMULTICAST_SINK(sink);
-    NvBufSurfaceCreateParams create_params = {0};
+    Gstudpmulticast_sink *self = GST_UDPMULTICAST_SINK(sink);
+
+    self->last_send_time_by_source.clear();
+    self->send_count = 0;
 
     CHECK_CUDA_STATUS(cudaSetDevice(self->gpu_id), "Unable to set cuda device");
 
@@ -651,8 +645,6 @@ static gboolean gst_udpmulticast_sink_stop(GstBaseSink *sink)
  */
 static gboolean gst_udpmulticast_sink_set_caps(GstBaseSink *sink, GstCaps *caps)
 {
-    Gstudpmulticast_sink *dsudpmulticast_sink = GST_UDPMULTICAST_SINK(sink);
-
     return TRUE;
 
 error:

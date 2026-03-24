@@ -18,6 +18,10 @@
 10. 常见问题 (FAQ)  
 11. 后续工作建议  
 
+接收方如果需要按实际线上报文对接，请优先阅读：
+
+- [`MESSAGE_FORMAT.md`](./MESSAGE_FORMAT.md)
+
 ---
 
 ## 1. 项目概述
@@ -166,13 +170,11 @@ g_object_set(mcast, "ip", "239.255.255.250", "port", 5000, "iface", "eth0", NULL
 
 ## 8. EO 协议与数据说明（简要）
 
-协议头部 (`MessageHeader`) 采用紧凑结构（`#pragma pack(1)`），包含：
-- `messageID` / `messageLength` / `sendCount` / `msgType`；
-- 发送/接收端站号 + 系统类型（`SystemType`）编码；
-- 时间字段（年/月/日/时/分/秒/子秒）；
-- 子系统标识；
-- 备用字段与报文体统计；
-- 报文体类型（JSON/BINARY）及长度。
+最新发送格式说明见：
+
+- [`MESSAGE_FORMAT.md`](./MESSAGE_FORMAT.md)
+
+当前实际发送的是 JSON 文本 UDP 报文，不是结构体裸内存。一个 UDP 包即一个完整 JSON 对象。
 
 目标体 (`EOTargetInfo`) 关键字段：
 - 时间；
@@ -187,10 +189,7 @@ g_object_set(mcast, "ip", "239.255.255.250", "port", 5000, "iface", "eth0", NULL
 ```cpp
 std::vector<uint8_t> EOProtocolParser::PackEOTargetMessage(
     const std::vector<EOTargetInfo>& targets,
-    uint16_t sendCount,
-    uint8_t senderStation, SystemType senderSystem,
-    uint8_t receiverStation, SystemType receiverSystem,
-    uint8_t senderSubsystem, uint8_t receiverSubsystem);
+    uint16_t sendCount);
 ```
 
 接收端通过 `ParseEOTargetMessage()` 解析。

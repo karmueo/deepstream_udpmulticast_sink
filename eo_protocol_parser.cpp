@@ -228,6 +228,7 @@ bool EOProtocolParser::ParseTargetInfoFromJson(const Json::Value &json,
         targetInfo.offset_h = json["offset_h"].asInt();
         targetInfo.offset_v = json["offset_v"].asInt();
         targetInfo.tar_rect = json["tar_rect"].asInt();
+        targetInfo.source_id = json.get("source_id", 0).asInt();
 
         return true;
     }
@@ -271,6 +272,7 @@ EOProtocolParser::CreateTargetInfoJson(const EOTargetInfo &targetInfo)
     json["offset_h"] = targetInfo.offset_h;
     json["offset_v"] = targetInfo.offset_v;
     json["tar_rect"] = targetInfo.tar_rect;
+    json["source_id"] = targetInfo.source_id;
 
     return json;
 }

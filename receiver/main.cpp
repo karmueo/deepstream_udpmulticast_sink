@@ -4,6 +4,8 @@
 #include <atomic>
 #include <thread>
 #include <chrono>
+#include <map>
+#include <set>
 
 static std::atomic<bool> g_stop{false};
 
@@ -26,13 +28,21 @@ int main(int argc, char** argv) {
 
     EOReceiver receiver(ip, port, bind_if);
     receiver.setCallback([](const MessageHeader& header, const std::vector<EOTargetInfo>& targets){
+        using Clock = std::chrono::steady_clock;
+        static std::map<int, Clock::time_point> last_seen_by_source;
+        std::set<int> msg_sources;
+        Clock::time_point now = Clock::now();
+
         std::cout << "---- Parsed Message ----" << std::endl;
         std::cout << "msg_id=0x" << std::hex << header.msg_id << std::dec 
                   << " msg_sn=" << header.msg_sn
                   << " cont_sum=" << header.cont_sum 
                   << " Targets=" << targets.size() << std::endl;
         for (const auto& t : targets) {
-            std::cout << "tar_id=" << t.tar_id
+            msg_sources.insert(t.source_id);
+            last_seen_by_source[t.source_id] = now;
+            std::cout << "source_id=" << t.source_id
+                      << " tar_id=" << t.tar_id
                       << " tar_category=" << t.tar_category
                       << " tar_iden=" << t.tar_iden
                       << " tar_cfid=" << t.tar_cfid
@@ -40,6 +50,29 @@ int main(int argc, char** argv) {
                       << " tar_rect=" << t.tar_rect
                       << std::endl;
         }
+
+        std::cout << "msg_sources={";
+        bool first = true;
+        for (int source_id : msg_sources) {
+            if (!first) std::cout << ",";
+            std::cout << source_id;
+            first = false;
+        }
+        std::cout << "}" << std::endl;
+
+        std::cout << "seen_last_10s={";
+        first = true;
+        for (const auto& entry : last_seen_by_source) {
+            int source_id = entry.first;
+            Clock::time_point last_seen = entry.second;
+            if (std::chrono::duration_cast<std::chrono::seconds>(now - last_seen).count() > 10) {
+                continue;
+            }
+            if (!first) std::cout << ",";
+            std::cout << source_id;
+            first = false;
+        }
+        std::cout << "}" << std::endl;
     });
 
     if (!receiver.start()) {

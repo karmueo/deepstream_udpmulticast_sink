@@ -159,6 +159,7 @@ struct EOTargetInfo
     int          offset_h;      // 水平脱靶量（整型）0
     int          offset_v;      // 垂直脱靶量（整型）0
     int          tar_rect;      // 目标位置，元素（整型），目标中心的像素值
+    int          source_id;     // DeepStream source_id，用于区分多路视频源
 };
 
 // 光电报文封装和解析类

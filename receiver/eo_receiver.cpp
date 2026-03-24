@@ -137,7 +137,8 @@ void EOReceiver::recvLoop() {
                           << " cont_sum=" << header.cont_sum 
                           << " targets=" << targets.size() << std::endl;
                 for (const auto& t : targets) {
-                    std::cout << "  tar_id=" << t.tar_id
+                    std::cout << "  source_id=" << t.source_id
+                              << " tar_id=" << t.tar_id
                               << " tar_category=" << t.tar_category
                               << " tar_iden=" << t.tar_iden
                               << " tar_cfid=" << t.tar_cfid
