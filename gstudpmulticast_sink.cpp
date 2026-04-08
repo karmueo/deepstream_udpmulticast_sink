@@ -360,7 +360,7 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
         NvDsMetaList             *l_obj = NULL;
         std::vector<EOTargetInfo> target_infos;
         DetectAnalysis            detect_analysis = {};
-        guint                     source_id = frame_meta->source_id;
+        guint                     source_id = frame_meta->pad_index;  // 优先使用原始流索引，避免 tiled 后 source_id 被压成 0。
         guint                     total_object_count = 0;
         guint64                   total_pixel_sum = 0;
         gdouble                   current_time = get_current_time_seconds();
