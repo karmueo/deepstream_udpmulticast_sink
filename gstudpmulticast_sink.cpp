@@ -459,29 +459,9 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                           obj_meta->rect_params.width / 2); // 目标中心的像素值
                 targetInfo.source_id = source_id;
 
-                switch (final_class_id)
-                {
-                case 0:
-                    targetInfo.tar_category =
-                        static_cast<int>(TargetClass::SMALL_BIRD);
-                    targetInfo.tar_iden = "bird";
-                    break;
-                case 1:
-                    targetInfo.tar_category =
-                        static_cast<int>(TargetClass::UAV);
-                    targetInfo.tar_iden = "uav";
-                    break;
-                case 2:
-                    targetInfo.tar_category =
-                        static_cast<int>(TargetClass::UAV);
-                    targetInfo.tar_iden = "uav";
-                    break;
-                default:
-                    targetInfo.tar_category =
-                        static_cast<int>(TargetClass::UNKNOWN);
-                    targetInfo.tar_iden = "unknown";
-                    break;
-                }
+                // 当前仅保留 UAV 一个类别，统一输出 tar_category=9 / tar_iden="uav"。
+                targetInfo.tar_category = static_cast<int>(TargetClass::UAV);
+                targetInfo.tar_iden = "uav";
 
                 targetInfo.tar_cfid = final_confidence;
                 targetInfo.trk_stat = (targetInfo.tar_cfid < 0.0f) ? 2 : 1;

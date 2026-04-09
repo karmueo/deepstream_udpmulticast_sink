@@ -151,8 +151,8 @@ struct EOTargetInfo
     double       tar_av;        // 目标水平角速度，度（双精度浮点），0
     double       tar_ev;        // 目标垂直角速度，度（双精度浮点），0
     double       tar_rv;        // 目标径向速度，单位米/s，没有距离信息填0（双精度浮点）
-    int          tar_category;  // 目标类型（整型）- 继续保持TargetClass
-    std::string  tar_iden;      // 目标具体型号（字符串），bird或者uav
+    int          tar_category;  // 目标类型（整型），当前固定为 TargetClass::UAV(9)
+    std::string  tar_iden;      // 目标具体型号（字符串），当前固定为 uav
     float        tar_cfid;      // 目标置信度（单精度浮点）
     double       fov_h;         // 视场中心水平角度，单位度（双精度浮点）0
     double       fov_v;         // 视场中心垂直角度（双精度浮点）0

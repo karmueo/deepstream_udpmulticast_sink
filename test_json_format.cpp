@@ -41,10 +41,10 @@ int main() {
     target1.source_id = 3;
     targetInfos.push_back(target1);
     
-    // 目标2
+    // 目标2，当前协议只保留 UAV 类，这里同样使用 uav 作为示例。
     EOTargetInfo target2 = target1;
-    target2.tar_category = static_cast<int>(TargetClass::SMALL_BIRD);
-    target2.tar_iden = "bird";
+    target2.tar_category = static_cast<int>(TargetClass::UAV);
+    target2.tar_iden = "uav";
     target2.tar_cfid = 0.88f;
     target2.tar_rect = 512;
     targetInfos.push_back(target2);
