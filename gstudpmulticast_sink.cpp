@@ -103,6 +103,12 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
 static gboolean      gst_udpmulticast_sink_start(GstBaseSink *sink);
 static gboolean      gst_udpmulticast_sink_stop(GstBaseSink *sink);
 
+struct TargetLabelMapping
+{
+    int         tar_category; // 映射后的目标类别编码
+    std::string tar_iden;     // 映射后的目标标签名
+};
+
 static gdouble
 get_current_time_seconds(void)
 {
@@ -179,6 +185,37 @@ create_empty_target(guint source_id)
     empty_target.source_id = source_id;
 
     return empty_target;
+}
+
+/**
+ * @brief 根据 DeepStream 目标标签名映射 EO 报文中的类别字段。
+ *
+ * @param obj_label DeepStream 生成的目标标签名，通常来自 labelfile-path。
+ * @return 映射后的目标类别编码和目标标签名。
+ */
+static TargetLabelMapping
+map_target_label_to_eo_fields(const gchar *obj_label)
+{
+    const std::string label_name = (obj_label != NULL) ? obj_label : ""; // 目标标签文本
+
+    if (label_name.empty())
+    {
+        return {static_cast<int>(TargetClass::UNKNOWN), "unknown"};
+    }
+
+    if (label_name == "人" || label_name == "person" || label_name == "Person" ||
+        label_name == "pedestrian" || label_name == "Pedestrian")
+    {
+        return {static_cast<int>(TargetClass::PEDESTRIAN), label_name};
+    }
+
+    if (label_name == "无人机" || label_name == "uav" || label_name == "UAV" ||
+        label_name == "drone" || label_name == "Drone")
+    {
+        return {static_cast<int>(TargetClass::UAV), label_name};
+    }
+
+    return {static_cast<int>(TargetClass::UNKNOWN), label_name};
 }
 
 static void
@@ -390,7 +427,6 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                         std::pair<guint16, guint>(obj_meta->class_id, 1));
                 }
 
-                guint16 final_class_id = obj_meta->class_id;
                 float   final_confidence = obj_meta->confidence;
                 gboolean has_classifier = FALSE;
 
@@ -414,7 +450,6 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
 
                         if (!has_classifier)
                         {
-                            final_class_id = label->result_class_id;
                             final_confidence = label->result_prob;
                             has_classifier = TRUE;
                         }
@@ -459,9 +494,10 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                           obj_meta->rect_params.width / 2); // 目标中心的像素值
                 targetInfo.source_id = source_id;
 
-                // 当前仅保留 UAV 一个类别，统一输出 tar_category=9 / tar_iden="uav"。
-                targetInfo.tar_category = static_cast<int>(TargetClass::UAV);
-                targetInfo.tar_iden = "uav";
+                const TargetLabelMapping target_mapping =
+                    map_target_label_to_eo_fields(obj_meta->obj_label); // 根据标签名映射目标类别和名称
+                targetInfo.tar_category = target_mapping.tar_category;
+                targetInfo.tar_iden = target_mapping.tar_iden;
 
                 targetInfo.tar_cfid = final_confidence;
                 targetInfo.trk_stat = (targetInfo.tar_cfid < 0.0f) ? 2 : 1;

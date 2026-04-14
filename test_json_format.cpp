@@ -41,10 +41,10 @@ int main() {
     target1.source_id = 3;
     targetInfos.push_back(target1);
     
-    // 目标2，当前协议只保留 UAV 类，这里同样使用 uav 作为示例。
+    // 目标2，示例中使用行人类别，验证不同 tar_category / tar_iden 可以并存。
     EOTargetInfo target2 = target1;
-    target2.tar_category = static_cast<int>(TargetClass::UAV);
-    target2.tar_iden = "uav";
+    target2.tar_category = static_cast<int>(TargetClass::PEDESTRIAN);
+    target2.tar_iden = "人";
     target2.tar_cfid = 0.88f;
     target2.tar_rect = 512;
     targetInfos.push_back(target2);

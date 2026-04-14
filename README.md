@@ -41,7 +41,7 @@
 - 支持 CUDA 12.x（默认 12.6 可覆盖）。
 - 组播发送：可配置组播 IP 与端口 (`ip`, `port`)。
 - 每帧多目标打包，包含：
-  - 目标 ID / class_id / secondary classifier IDs；
+  - 目标 ID / class_id / obj_label / secondary classifier IDs；
   - 置信度、BBox、面积、像素统计（最小/平均像素）；
   - 时间戳、发送计数；
   - EO 协议头部字段（系统/子系统标识等拓展位）。
@@ -159,7 +159,7 @@ g_object_set(mcast, "ip", "239.255.255.250", "port", 5000, "iface", "eth0", NULL
 内部运行逻辑：
 1. 在 `start()` 中初始化 GPU 设备（`cudaSetDevice`）。
 2. 在 `render()` 中遍历 NvDsBatchMeta 中每帧和每个对象：
-   - 收集目标 BBox / class_id / secondary classifier；
+   - 收集目标 BBox / class_id / obj_label / secondary classifier；
    - 统计最小像素、平均像素、分类计数；
    - 组装 `EOTargetInfo` 列表；
    - 使用 `EOProtocolParser::PackEOTargetMessage()` 打包；
