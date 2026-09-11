@@ -9,6 +9,13 @@
 #include <unistd.h>
 #ifdef __cplusplus
 #include <map>
+
+struct SotReportState
+{
+    guint64 active_object_id = G_MAXUINT64;
+    gint tar_id = 0;
+    gboolean tracking = FALSE;
+};
 #endif
 
 #define PACKAGE "_udpmulticast_sink"
@@ -44,8 +51,11 @@ struct _Gstudpmulticast_sink
     guint  port; // multicast port
     gchar *iface; // multicast network interface name
     guint  fps;  // report rate in frames per second (default: 25)
+    gboolean sot_mode; // only report one valid tracked object per source
+    gfloat sot_score_threshold; // normal/extrapolated status threshold
 #ifdef __cplusplus
-    std::map<guint, gdouble> last_send_time_by_source; // per-source send timestamp
+    std::map<guint, gint64> last_send_time_by_source; // per-source monotonic timestamp
+    std::map<guint, SotReportState> sot_report_state_by_source;
 #endif
     guint16 send_count; // packet counter
 };

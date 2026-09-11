@@ -72,7 +72,9 @@ enum
     PROP_IP,
     PROP_PORT,
     PROP_IFACE,
-    PROP_FPS
+    PROP_FPS,
+    PROP_SOT_MODE,
+    PROP_SOT_SCORE_THRESHOLD
 };
 
 /* the capabilities of the inputs and outputs.
@@ -109,25 +111,19 @@ struct TargetLabelMapping
     std::string tar_iden;     // 映射后的目标标签名
 };
 
-static gdouble
-get_current_time_seconds(void)
-{
-    struct timeval tv_now;
-    gettimeofday(&tv_now, NULL);
-    return tv_now.tv_sec + tv_now.tv_usec / 1000000.0;
-}
-
 static gboolean
 should_send_for_source(Gstudpmulticast_sink *self, guint source_id,
-                       gdouble current_time)
+                       gint64 current_time_us)
 {
-    gdouble send_interval = (self->fps > 0) ? (1.0 / self->fps) : 0.04;
+    gint64 send_interval_us = (self->fps > 0)
+                                 ? (G_USEC_PER_SEC / self->fps)
+                                 : 40000;
     auto    last_it = self->last_send_time_by_source.find(source_id);
 
     if (last_it == self->last_send_time_by_source.end() ||
-        current_time - last_it->second >= send_interval)
+        current_time_us - last_it->second >= send_interval_us)
     {
-        self->last_send_time_by_source[source_id] = current_time;
+        self->last_send_time_by_source[source_id] = current_time_us;
         return TRUE;
     }
 
@@ -299,6 +295,19 @@ static void gst_udpmulticast_sink_class_init(Gstudpmulticast_sinkClass *klass)
         g_param_spec_uint(
             "fps", "Report FPS", "Frame rate for sending target reports", 1, 120,
             25, (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(
+        gobject_class, PROP_SOT_MODE,
+        g_param_spec_boolean(
+            "sot-mode", "SOT mode",
+            "Only report one valid tracked object for each source", FALSE,
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
+    g_object_class_install_property(
+        gobject_class, PROP_SOT_SCORE_THRESHOLD,
+        g_param_spec_float(
+            "sot-score-threshold", "SOT score threshold",
+            "Minimum tracker confidence reported as normal tracking",
+            0.0f, 1.0f, 0.75f,
+            (GParamFlags)(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS)));
 
 }
 
@@ -320,6 +329,8 @@ static void gst_udpmulticast_sink_init(Gstudpmulticast_sink *self)
     self->port = 5000;
     self->iface = NULL;
     self->fps = 25;
+    self->sot_mode = FALSE;
+    self->sot_score_threshold = 0.75f;
     self->send_count = 0;
 
     // 创建UDP Socket
@@ -400,17 +411,80 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
         guint                     source_id = frame_meta->pad_index;  // 优先使用原始流索引，避免 tiled 后 source_id 被压成 0。
         guint                     total_object_count = 0;
         guint64                   total_pixel_sum = 0;
-        gdouble                   current_time = get_current_time_seconds();
+        gint64                    current_time_us = g_get_monotonic_time();
         gboolean                  should_send =
-            should_send_for_source(self, source_id, current_time);
+            should_send_for_source(self, source_id, current_time_us);
+        NvDsObjectMeta           *sot_candidate = NULL;
+        SotReportState           *sot_state = NULL;
 
         detect_analysis.frameNum = frame_meta->frame_num + 1;
         detect_analysis.minPixel = G_MAXUINT16;
+
+        if (self->sot_mode)
+        {
+            sot_state = &self->sot_report_state_by_source[source_id];
+            NvDsObjectMeta *best_candidate = NULL;
+
+            for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
+                 l_obj = l_obj->next)
+            {
+                NvDsObjectMeta *candidate =
+                    (NvDsObjectMeta *)(l_obj->data);
+                const gboolean valid =
+                    candidate && candidate->class_id >= 0 &&
+                    candidate->object_id != UNTRACKED_OBJECT_ID &&
+                    std::isfinite(candidate->tracker_confidence) &&
+                    candidate->tracker_confidence > 0.0f &&
+                    candidate->rect_params.width > 0.0f &&
+                    candidate->rect_params.height > 0.0f;
+
+                if (!valid)
+                    continue;
+
+                if (sot_state->tracking &&
+                    candidate->object_id == sot_state->active_object_id)
+                {
+                    sot_candidate = candidate;
+                    break;
+                }
+
+                if (!best_candidate ||
+                    candidate->tracker_confidence >
+                        best_candidate->tracker_confidence)
+                {
+                    best_candidate = candidate;
+                }
+            }
+
+            if (!sot_candidate)
+                sot_candidate = best_candidate;
+
+            if (sot_candidate)
+            {
+                if (!sot_state->tracking ||
+                    sot_state->active_object_id != sot_candidate->object_id)
+                {
+                    sot_state->tar_id =
+                        (sot_state->tar_id >= G_MAXINT) ? 1
+                                                       : sot_state->tar_id + 1;
+                    sot_state->active_object_id = sot_candidate->object_id;
+                }
+                sot_state->tracking = TRUE;
+            }
+            else
+            {
+                sot_state->tracking = FALSE;
+                sot_state->active_object_id = G_MAXUINT64;
+            }
+        }
 
         for (l_obj = frame_meta->obj_meta_list; l_obj != NULL;
              l_obj = l_obj->next)
         {
             NvDsObjectMeta *obj_meta = (NvDsObjectMeta *)(l_obj->data);
+
+            if (self->sot_mode && obj_meta != sot_candidate)
+                continue;
 
             if ((obj_meta->class_id >= 0))
             {
@@ -448,7 +522,7 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                                 std::pair<guint16, guint>(
                                     label->result_class_id, 1));
 
-                        if (!has_classifier)
+                        if (!self->sot_mode && !has_classifier)
                         {
                             final_confidence = label->result_prob;
                             has_classifier = TRUE;
@@ -470,7 +544,7 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                 fill_target_timestamp(&targetInfo);
                 targetInfo.dev_id = 0;   // 固定为0（可见光）
                 targetInfo.guid_id = 0;  // 固定为0
-                targetInfo.tar_id = 0;   // 固定为0
+                targetInfo.tar_id = self->sot_mode ? sot_state->tar_id : 0;
                 targetInfo.trk_stat = 1; // 默认正常，后续根据置信度调整
                 targetInfo.trk_mod = 0;  // 固定为0（检测跟踪）
 
@@ -499,8 +573,23 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
                 targetInfo.tar_category = target_mapping.tar_category;
                 targetInfo.tar_iden = target_mapping.tar_iden;
 
-                targetInfo.tar_cfid = final_confidence;
-                targetInfo.trk_stat = (targetInfo.tar_cfid < 0.0f) ? 2 : 1;
+                if (self->sot_mode)
+                {
+                    targetInfo.tar_cfid =
+                        CLAMP(obj_meta->tracker_confidence, 0.0f, 1.0f);
+                    const gboolean has_detection = obj_meta->confidence >= 0.0f;
+                    targetInfo.trk_stat =
+                        (has_detection &&
+                         targetInfo.tar_cfid >= self->sot_score_threshold)
+                            ? 1
+                            : 2;
+                }
+                else
+                {
+                    targetInfo.tar_cfid = final_confidence;
+                    targetInfo.trk_stat =
+                        (targetInfo.tar_cfid < 0.0f) ? 2 : 1;
+                }
                 target_infos.push_back(targetInfo);
             }
         }
@@ -577,6 +666,7 @@ static gboolean gst_udpmulticast_sink_start(GstBaseSink *sink)
     Gstudpmulticast_sink *self = GST_UDPMULTICAST_SINK(sink);
 
     self->last_send_time_by_source.clear();
+    self->sot_report_state_by_source.clear();
     self->send_count = 0;
 
     CHECK_CUDA_STATUS(cudaSetDevice(self->gpu_id), "Unable to set cuda device");
@@ -696,6 +786,12 @@ static void gst_udpmulticast_sink_set_property(GObject      *object,
         self->fps = g_value_get_uint(value);
         GST_INFO("Set report FPS to: %u", self->fps);
         break;
+    case PROP_SOT_MODE:
+        self->sot_mode = g_value_get_boolean(value);
+        break;
+    case PROP_SOT_SCORE_THRESHOLD:
+        self->sot_score_threshold = g_value_get_float(value);
+        break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
     }
@@ -723,6 +819,12 @@ static void gst_udpmulticast_sink_get_property(GObject    *object,
         break;
     case PROP_FPS:
         g_value_set_uint(value, self->fps);
+        break;
+    case PROP_SOT_MODE:
+        g_value_set_boolean(value, self->sot_mode);
+        break;
+    case PROP_SOT_SCORE_THRESHOLD:
+        g_value_set_float(value, self->sot_score_threshold);
         break;
     default:
         G_OBJECT_WARN_INVALID_PROPERTY_ID(object, property_id, pspec);
