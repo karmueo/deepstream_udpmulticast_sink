@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.16)
 project(gst_udpmulticast_sink LANGUAGES CXX)
 
+get_filename_component(REPOSITORY_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
+add_compile_options("-ffile-prefix-map=${REPOSITORY_ROOT}=.")
+
 # install dirs (和原 Makefile 保持一致的默认值)
 set(LIB_INSTALL_DIR "/opt/nvidia/deepstream/deepstream/lib" CACHE PATH "Library install dir")
 set(GST_INSTALL_DIR "/opt/nvidia/deepstream/deepstream/lib/gst-plugins/" CACHE PATH "GStreamer plugin dir")
