@@ -231,7 +231,7 @@ def summarize_json_target(target: dict) -> str:
         f"tar_category={target.get('tar_category', 0)} "
         f"trk_stat={target.get('trk_stat', 0)} "
         f"tar_cfid={float(target.get('tar_cfid', 0.0) or 0.0):.4f} "
-        f"tar_rect={target.get('tar_rect', 0)}"
+        f"tar_rect={target.get('tar_rect', [0.0, 0.0, 0.0, 0.0])}"
     )
 
 

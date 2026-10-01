@@ -22,6 +22,7 @@
 #include "gstnvdsmeta.h"
 #include "gstudpmulticast_sink.h"
 #include "nvbufsurface.h"
+#include "normalized_rect.h"
 #include <gst/base/gstbasetransform.h>
 #include <gst/gstelement.h>
 #include <gst/gstinfo.h>
@@ -174,7 +175,7 @@ create_empty_target(guint source_id)
     empty_target.fov_v = 0.0;
     empty_target.offset_h = 0;
     empty_target.offset_v = 0;
-    empty_target.tar_rect = 0;
+    empty_target.tar_rect = {};
     empty_target.tar_category = static_cast<int>(TargetClass::UNKNOWN);
     empty_target.tar_iden = "none";
     empty_target.tar_cfid = 0.0f;
@@ -405,6 +406,24 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
          l_frame = l_frame->next)
     {
         NvDsFrameMeta            *frame_meta = (NvDsFrameMeta *)(l_frame->data);
+        // 框坐标属于处理帧，不能直接用 streammux 输入的 source_frame_width/height。
+        guint frame_width = frame_meta->pipeline_width;
+        guint frame_height = frame_meta->pipeline_height;
+        if (in_map_info.size >= sizeof(NvBufSurface))
+        {
+            const NvBufSurface *surface =
+                reinterpret_cast<const NvBufSurface *>(in_map_info.data);
+            if (surface->surfaceList && frame_meta->batch_id < surface->numFilled)
+            {
+                const NvBufSurfaceParams &frame_surface =
+                    surface->surfaceList[frame_meta->batch_id];
+                if (frame_surface.width > 0 && frame_surface.height > 0)
+                {
+                    frame_width = frame_surface.width;
+                    frame_height = frame_surface.height;
+                }
+            }
+        }
         NvDsMetaList             *l_obj = NULL;
         std::vector<EOTargetInfo> target_infos;
         DetectAnalysis            detect_analysis = {};
@@ -488,6 +507,17 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
 
             if ((obj_meta->class_id >= 0))
             {
+                std::array<double, 4> normalized_rect;
+                const NvOSD_RectParams &rect = obj_meta->rect_params;
+                if (!normalize_target_rect(rect.left, rect.top, rect.width,
+                                            rect.height, frame_width,
+                                            frame_height, normalized_rect))
+                {
+                    GST_WARNING_OBJECT(self,
+                        "Skipping invalid target rectangle for source_id=%u (frame=%ux%u)",
+                        source_id, frame_width, frame_height);
+                    continue;
+                }
                 std::map<guint16, guint>::iterator it =
                     detect_analysis.primaryClassCountMap.find(
                         obj_meta->class_id);
@@ -563,9 +593,7 @@ static GstFlowReturn gst_udpmulticast_sink_render(GstBaseSink *sink,
 
                 targetInfo.offset_h = 0; // 固定为0
                 targetInfo.offset_v = 0; // 固定为0
-                targetInfo.tar_rect =
-                    (int)(obj_meta->rect_params.left +
-                          obj_meta->rect_params.width / 2); // 目标中心的像素值
+                targetInfo.tar_rect = normalized_rect;
                 targetInfo.source_id = source_id;
 
                 const TargetLabelMapping target_mapping =

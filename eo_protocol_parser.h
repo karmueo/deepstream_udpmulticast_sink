@@ -1,6 +1,7 @@
 #ifndef EOPROTOCOLPARSER_H
 #define EOPROTOCOLPARSER_H
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -158,7 +159,7 @@ struct EOTargetInfo
     double       fov_v;         // 视场中心垂直角度（双精度浮点）0
     int          offset_h;      // 水平脱靶量（整型）0
     int          offset_v;      // 垂直脱靶量（整型）0
-    int          tar_rect;      // 目标位置，元素（整型），目标中心的像素值
+    std::array<double, 4> tar_rect{}; // [左上角x, 左上角y, 宽, 高]，归一化到[0,1]
     int          source_id;     // DeepStream source_id，用于区分多路视频源
 };
 

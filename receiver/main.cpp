@@ -47,7 +47,9 @@ int main(int argc, char** argv) {
                       << " tar_iden=" << t.tar_iden
                       << " tar_cfid=" << t.tar_cfid
                       << " offset_h=" << t.offset_h << " offset_v=" << t.offset_v
-                      << " tar_rect=" << t.tar_rect
+                      << " tar_rect=[" << t.tar_rect[0] << ","
+                      << t.tar_rect[1] << "," << t.tar_rect[2] << ","
+                      << t.tar_rect[3] << "]"
                       << std::endl;
         }
 

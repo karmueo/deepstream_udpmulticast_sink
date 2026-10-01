@@ -20,7 +20,7 @@
 
 接收方如果需要按实际线上报文对接，请优先阅读：
 
-- [`MESSAGE_FORMAT.md`](./MESSAGE_FORMAT.md)
+- [`报文说明.md`](./报文说明.md)
 
 ---
 
@@ -172,7 +172,7 @@ g_object_set(mcast, "ip", "239.255.255.250", "port", 5000, "iface", "eth0", NULL
 
 最新发送格式说明见：
 
-- [`MESSAGE_FORMAT.md`](./MESSAGE_FORMAT.md)
+- [`报文说明.md`](./报文说明.md)
 
 当前实际发送的是 JSON 文本 UDP 报文，不是结构体裸内存。一个 UDP 包即一个完整 JSON 对象。
 
@@ -181,7 +181,7 @@ g_object_set(mcast, "ip", "239.255.255.250", "port", 5000, "iface", "eth0", NULL
 - 设备类型 (`DeviceType`)；
 - 目标 ID / 状态 / 跟踪模式；
 - 角度 / 位姿（部分当前留空或默认值）；
-- BBox 中心偏移、面积（`targetRect`）；
+- 归一化检测框 `tar_rect=[x,y,width,height]`（x/y 为左上角，四项均在 `[0,1]`）；
 - 目标类别 (`TargetClass`)；
 - 置信度 / 距离（距离可选未填）。
 

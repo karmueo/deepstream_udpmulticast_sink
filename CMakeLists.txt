@@ -69,3 +69,15 @@ option(BUILD_EO_RECEIVER "Build EO multicast receiver tool" ON)
 if(BUILD_EO_RECEIVER)
   add_subdirectory(receiver)
 endif()
+
+include(CTest)
+if(BUILD_TESTING)
+  add_executable(test_json_format test_json_format.cpp eo_protocol_parser.cpp)
+  target_include_directories(test_json_format PRIVATE ${JSONCPP_INCLUDE_DIRS})
+  target_link_libraries(test_json_format PRIVATE
+    $<$<BOOL:${JsonCpp_FOUND}>:JsonCpp::JsonCpp>
+    $<$<BOOL:${JSONCPP_LIBRARIES}>:${JSONCPP_LIBRARIES}>
+    $<$<NOT:$<BOOL:${JsonCpp_FOUND}>>:jsoncpp>
+  )
+  add_test(NAME normalized_target_json COMMAND test_json_format)
+endif()

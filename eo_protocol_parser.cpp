@@ -1,5 +1,6 @@
 #include "eo_protocol_parser.h"
 #include <arpa/inet.h>
+#include <cmath>
 #include <cstring>
 #include <ctime>
 #include <jsoncpp/json/reader.h>
@@ -119,9 +120,11 @@ bool EOProtocolParser::ParseEOTargetMessage(const uint8_t           *data,
         const Json::Value& contArray = jsonMessage["cont"];
         for (const auto& targetJson : contArray) {
             EOTargetInfo targetInfo;
-            if (ParseTargetInfoFromJson(targetJson, targetInfo)) {
-                targetInfos.push_back(targetInfo);
+            if (!ParseTargetInfoFromJson(targetJson, targetInfo)) {
+                targetInfos.clear();
+                return false;
             }
+            targetInfos.push_back(targetInfo);
         }
     }
 
@@ -227,7 +230,24 @@ bool EOProtocolParser::ParseTargetInfoFromJson(const Json::Value &json,
         targetInfo.fov_v = json["fov_v"].asDouble();
         targetInfo.offset_h = json["offset_h"].asInt();
         targetInfo.offset_v = json["offset_v"].asInt();
-        targetInfo.tar_rect = json["tar_rect"].asInt();
+        const Json::Value &rect = json["tar_rect"];
+        if (!rect.isArray() || rect.size() != targetInfo.tar_rect.size())
+        {
+            return false;
+        }
+        for (Json::ArrayIndex i = 0; i < rect.size(); ++i)
+        {
+            if (!rect[i].isNumeric())
+            {
+                return false;
+            }
+            const double value = rect[i].asDouble();
+            if (!std::isfinite(value) || value < 0.0 || value > 1.0)
+            {
+                return false;
+            }
+            targetInfo.tar_rect[i] = value;
+        }
         targetInfo.source_id = json.get("source_id", 0).asInt();
 
         return true;
@@ -271,7 +291,11 @@ EOProtocolParser::CreateTargetInfoJson(const EOTargetInfo &targetInfo)
     json["fov_v"] = targetInfo.fov_v;
     json["offset_h"] = targetInfo.offset_h;
     json["offset_v"] = targetInfo.offset_v;
-    json["tar_rect"] = targetInfo.tar_rect;
+    json["tar_rect"] = Json::Value(Json::arrayValue);
+    for (double value : targetInfo.tar_rect)
+    {
+        json["tar_rect"].append(value);
+    }
     json["source_id"] = targetInfo.source_id;
 
     return json;
